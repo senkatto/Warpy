@@ -2,9 +2,9 @@
 package com.warpy.app.vpn.generated
 
 internal object CoreContract {
-    const val SOURCE_SHA256 = "50311822805c10890375e948c37b9f221292e33ec10be4da8bc2c1a14aff8a2f"
+    const val SOURCE_SHA256 = "61dfe9d722a0c140d8caa515f7c70e3f84f5a73e60bbeb4aa77cae2bee2a2552"
     const val VERSION = 1
-    val protocols = setOf("vless", "trojan", "hysteria2")
+    val protocols = setOf("vless", "trojan", "hysteria2", "vmess", "shadowsocks", "socks", "wireguard", "tuic", "hysteria")
     val transports = setOf("tcp", "raw", "ws", "grpc", "http", "httpupgrade", "xhttp")
 
     object Tags {

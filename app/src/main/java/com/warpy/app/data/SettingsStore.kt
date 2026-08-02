@@ -88,6 +88,7 @@ internal fun groupProfiles(profiles: List<VpnProfile>): List<VpnProfile> {
         val isGroup = when (profile.protocol) {
             Protocol.Vless -> (vlessGroups[profile.uuid]?.size ?: 0) >= 3
             Protocol.Hysteria2, Protocol.Trojan -> (passwordGroups[profile.password]?.size ?: 0) >= 3
+            else -> false
         }
 
         if (isGroup) profile.copy(group = "BlancVPN") else profile
@@ -348,6 +349,19 @@ private fun JSONObject.toProfile(): VpnProfile = VpnProfile(
         xhttpMode = optString("xhttpMode"),
         multiplex = optBoolean("multiplex"),
         group = optString("group"),
+        username = optString("username"),
+        encryption = optString("encryption"),
+        alterId = optInt("alterId"),
+        packetEncoding = optString("packetEncoding"),
+        privateKey = optString("privateKey"),
+        peerPublicKey = optString("peerPublicKey"),
+        preSharedKey = optString("preSharedKey"),
+        localAddress = optString("localAddress"),
+        reserved = optString("reserved"),
+        mtu = optInt("mtu"),
+        congestionControl = optString("congestionControl"),
+        udpRelayMode = optString("udpRelayMode"),
+        raw = optString("raw"),
     )
 
 private fun VpnProfile.toJson(): JSONObject = JSONObject()
@@ -378,3 +392,16 @@ private fun VpnProfile.toJson(): JSONObject = JSONObject()
         .put("xhttpMode", xhttpMode)
         .put("multiplex", multiplex)
         .put("group", group)
+        .put("username", username)
+        .put("encryption", encryption)
+        .put("alterId", alterId)
+        .put("packetEncoding", packetEncoding)
+        .put("privateKey", privateKey)
+        .put("peerPublicKey", peerPublicKey)
+        .put("preSharedKey", preSharedKey)
+        .put("localAddress", localAddress)
+        .put("reserved", reserved)
+        .put("mtu", mtu)
+        .put("congestionControl", congestionControl)
+        .put("udpRelayMode", udpRelayMode)
+        .put("raw", raw)

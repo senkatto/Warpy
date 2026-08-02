@@ -73,6 +73,92 @@ function decode(value) {
   return decodeURIComponent(value || '');
 }
 
+function decodeBase64Utf8(value) {
+  const compact = String(value || '').trim().replace(/-/g, '+').replace(/_/g, '/');
+  if (!compact || compact.length % 4 === 1) return null;
+  try {
+    const binary = atob(compact + '='.repeat((4 - compact.length % 4) % 4));
+    return new TextDecoder().decode(Uint8Array.from(binary, character => character.charCodeAt(0)));
+  } catch {
+    return null;
+  }
+}
+
+function profileName(url, fallback) {
+  return decode(url.hash.slice(1)).trim() || fallback;
+}
+
+function parseVmessLink(source) {
+  const decoded = decodeBase64Utf8(source.replace(/^vmess:\/\//i, '').split('#', 1)[0]);
+  if (!decoded) return null;
+  try {
+    const value = JSON.parse(decoded);
+    const host = String(value.add || '').trim();
+    const port = Number.parseInt(value.port, 10);
+    const uuid = String(value.id || '').trim();
+    const transport = String(value.net || 'tcp').toLowerCase();
+    if (!host || !uuid || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+    if (!SUPPORTED_TRANSPORTS.has(transport) || transport === 'xhttp') return null;
+    return {
+      protocol: 'vmess',
+      name: String(value.ps || '').trim() || host,
+      host,
+      port,
+      uuid,
+      security: String(value.tls || '').toLowerCase(),
+      sni: String(value.sni || ''),
+      fp: String(value.fp || 'chrome'),
+      transport,
+      path: String(value.path || ''),
+      hostHeader: String(value.host || ''),
+      serviceName: transport === 'grpc' ? String(value.path || '') : '',
+      encryption: String(value.scy || 'auto'),
+      alterId: Number.parseInt(value.aid, 10) || 0,
+      packetEncoding: String(value.packetEncoding || ''),
+      raw: source,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseShadowsocksLink(source) {
+  const [withoutFragment] = source.split('#', 1);
+  const name = source.includes('#') ? decode(source.slice(source.indexOf('#') + 1)).trim() : '';
+  const body = withoutFragment.replace(/^ss:\/\//i, '');
+  let decoded;
+  if (body.includes('@')) {
+    const at = body.lastIndexOf('@');
+    const rawCredential = body.slice(0, at);
+    const credential = rawCredential.includes(':') ? decode(rawCredential) : decodeBase64Utf8(rawCredential);
+    if (!credential) return null;
+    decoded = `${credential}@${body.slice(at + 1)}`;
+  } else {
+    decoded = decodeBase64Utf8(body);
+  }
+  if (!decoded?.includes('@')) return null;
+  const at = decoded.lastIndexOf('@');
+  const credential = decoded.slice(0, at);
+  const separator = credential.indexOf(':');
+  if (separator < 1) return null;
+  try {
+    const url = new URL(`ss://${encodeURIComponent(credential.slice(0, separator))}:${encodeURIComponent(credential.slice(separator + 1))}@${decoded.slice(at + 1)}`);
+    const port = parsePort(url);
+    if (!url.hostname || !port) return null;
+    return {
+      protocol: 'shadowsocks',
+      name: name || url.hostname,
+      host: url.hostname,
+      port,
+      encryption: credential.slice(0, separator),
+      password: credential.slice(separator + 1),
+      raw: source,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function parsePort(url) {
   const port = url.port ? Number.parseInt(url.port, 10) : 443;
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
@@ -82,16 +168,24 @@ export function parseProfileLink(rawLink) {
   const source = String(rawLink || '').trim();
   if (!source) return null;
 
+  if (/^vmess:\/\//i.test(source)) return parseVmessLink(source);
+  if (/^ss:\/\//i.test(source)) return parseShadowsocksLink(source);
+
   try {
-    const link = source.replace(/^hy2:\/\//i, 'hysteria2://');
+    const link = source
+      .replace(/^hy2:\/\//i, 'hysteria2://')
+      .replace(/^socks5:\/\//i, 'socks://')
+      .replace(/^wg:\/\//i, 'wireguard://');
     const url = new URL(link);
     const protocol = url.protocol.slice(0, -1).toLowerCase();
     const port = parsePort(url);
     const credential = decode(url.username);
+    const password = decode(url.password);
     const host = url.hostname.startsWith('[') && url.hostname.endsWith(']')
       ? url.hostname.slice(1, -1)
       : url.hostname;
-    if (!SUPPORTED_PROTOCOLS.has(protocol) || !host || !port || !credential) return null;
+    if (!SUPPORTED_PROTOCOLS.has(protocol) || !host || !port) return null;
+    if (['vless', 'trojan', 'hysteria2', 'tuic'].includes(protocol) && !credential) return null;
 
     const obfsPassword = url.searchParams.get('obfs-password')
       || url.searchParams.get('obfs_password')
@@ -100,7 +194,7 @@ export function parseProfileLink(rawLink) {
     const requestedXhttpMode = (url.searchParams.get('mode') || '').toLowerCase();
     const profile = {
       protocol,
-      name: decode(url.hash.slice(1)).trim() || protocol,
+      name: profileName(url, host || protocol),
       host,
       port,
       uuid: credential,
@@ -129,10 +223,29 @@ export function parseProfileLink(rawLink) {
         || url.searchParams.get('obfs-type')
         || (obfsPassword ? 'salamander' : ''),
       obfsPassword,
+      username: protocol === 'socks' ? credential : '',
+      password: protocol === 'tuic' || protocol === 'socks' ? password : '',
+      encryption: '',
+      alterId: 0,
+      privateKey: url.searchParams.get('pk') || url.searchParams.get('private_key') || '',
+      peerPublicKey: url.searchParams.get('peer_pk') || url.searchParams.get('public_key') || '',
+      preSharedKey: url.searchParams.get('pre_shared_key') || url.searchParams.get('psk') || '',
+      localAddress: url.searchParams.get('local_address') || url.searchParams.get('address') || '',
+      reserved: url.searchParams.get('reserved') || '',
+      mtu: Number.parseInt(url.searchParams.get('mtu'), 10) || 0,
+      congestionControl: url.searchParams.get('congestion_control') || url.searchParams.get('congestion-control') || 'cubic',
+      udpRelayMode: url.searchParams.get('udp_relay_mode') || url.searchParams.get('udp-relay-mode') || 'native',
       raw: link,
     };
 
-    if (protocol !== 'hysteria2' && !SUPPORTED_TRANSPORTS.has(transport)) return null;
+    if (protocol === 'hysteria') {
+      profile.uuid = url.searchParams.get('auth') || url.searchParams.get('auth_str') || credential;
+      profile.obfsPassword = url.searchParams.get('obfs') || profile.obfsPassword;
+      profile.upMbps = Number.parseInt(url.searchParams.get('upmbps') || url.searchParams.get('up_mbps'), 10) || 0;
+      profile.downMbps = Number.parseInt(url.searchParams.get('downmbps') || url.searchParams.get('down_mbps'), 10) || 0;
+    }
+    if (protocol === 'wireguard' && (!profile.privateKey || !profile.peerPublicKey || !profile.localAddress)) return null;
+    if (!['hysteria2', 'hysteria', 'tuic', 'wireguard', 'socks'].includes(protocol) && !SUPPORTED_TRANSPORTS.has(transport)) return null;
     if (transport === 'xhttp' && protocol !== 'vless') return null;
     return profile;
   } catch {
@@ -203,6 +316,9 @@ function buildTls(profile, required = false) {
 }
 
 function buildProxyOutbound(profile, tag = TAGS.proxy) {
+  if (profile.protocol === 'wireguard') {
+    throw new Error('WireGuard is configured as an endpoint');
+  }
   const outbound = {
     type: profile.protocol,
     tag,
@@ -239,6 +355,34 @@ function buildProxyOutbound(profile, tag = TAGS.proxy) {
     if (profile.obfsType && profile.obfsPassword) {
       outbound.obfs = { type: profile.obfsType, password: profile.obfsPassword };
     }
+  } else if (profile.protocol === 'vmess') {
+    outbound.uuid = profile.uuid;
+    outbound.security = profile.encryption || 'auto';
+    outbound.alter_id = profile.alterId || 0;
+    if (profile.packetEncoding) outbound.packet_encoding = profile.packetEncoding;
+    const tls = buildTls(profile);
+    if (tls) outbound.tls = tls;
+    const transport = buildTransport(profile);
+    if (transport) outbound.transport = transport;
+  } else if (profile.protocol === 'shadowsocks') {
+    outbound.method = profile.encryption;
+    outbound.password = profile.password;
+  } else if (profile.protocol === 'socks') {
+    outbound.version = '5';
+    if (profile.username) outbound.username = profile.username;
+    if (profile.password) outbound.password = profile.password;
+  } else if (profile.protocol === 'tuic') {
+    outbound.uuid = profile.uuid;
+    outbound.password = profile.password || '';
+    outbound.congestion_control = profile.congestionControl || 'cubic';
+    outbound.udp_relay_mode = profile.udpRelayMode || 'native';
+    outbound.tls = buildTls(profile, true);
+  } else if (profile.protocol === 'hysteria') {
+    if (profile.uuid) outbound.auth_str = profile.uuid;
+    if (profile.obfsPassword) outbound.obfs = profile.obfsPassword;
+    if (profile.upMbps > 0) outbound.up_mbps = profile.upMbps;
+    if (profile.downMbps > 0) outbound.down_mbps = profile.downMbps;
+    outbound.tls = buildTls(profile, true);
   } else {
     throw new Error(`Unsupported protocol: ${profile.protocol}`);
   }
@@ -246,12 +390,45 @@ function buildProxyOutbound(profile, tag = TAGS.proxy) {
   return outbound;
 }
 
+function buildWireGuardEndpoint(profile, tag) {
+  const peer = {
+    address: profile.host,
+    port: profile.port,
+    public_key: profile.peerPublicKey,
+    allowed_ips: ['0.0.0.0/0', '::/0'],
+  };
+  if (profile.preSharedKey) peer.pre_shared_key = profile.preSharedKey;
+  const reserved = String(profile.reserved || '').split(/[,;]/).map(Number);
+  if (reserved.length === 3 && reserved.every(value => Number.isInteger(value) && value >= 0 && value <= 255)) {
+    peer.reserved = reserved;
+  }
+  return {
+    type: 'wireguard',
+    tag,
+    address: String(profile.localAddress).split(/[,;]/).map(value => value.trim()).filter(Boolean),
+    private_key: profile.privateKey,
+    peers: [peer],
+    ...(profile.mtu > 0 ? { mtu: profile.mtu } : {}),
+  };
+}
+
 function normalizeProfile(inputProfile) {
   const reparsed = inputProfile.raw ? parseProfileLink(inputProfile.raw) : null;
   const profile = reparsed
     ? { ...reparsed, name: inputProfile.name, group: inputProfile.group }
     : { ...inputProfile };
-  if (!profile.host || !profile.port || !profile.uuid || !SUPPORTED_PROTOCOLS.has(profile.protocol)) {
+  const hasCredentials = {
+    vless: Boolean(profile.uuid),
+    trojan: Boolean(profile.uuid),
+    hysteria2: Boolean(profile.uuid),
+    vmess: Boolean(profile.uuid),
+    shadowsocks: Boolean(profile.encryption && profile.password),
+    socks: true,
+    wireguard: Boolean(profile.privateKey && profile.peerPublicKey && profile.localAddress),
+    tuic: Boolean(profile.uuid),
+    hysteria: true,
+  }[profile.protocol];
+  if (!profile.host || !profile.port || !hasCredentials || !SUPPORTED_PROTOCOLS.has(profile.protocol)) {
     throw new Error('Incomplete VPN profile');
   }
   return profile;
@@ -346,11 +523,13 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
         mtu: Number(settings.mtu) > 0 ? Number(settings.mtu) : WINDOWS.defaultMtu,
       },
     ],
-    outbounds: [
-      buildProxyOutbound(profile),
-      { type: 'direct', tag: TAGS.direct },
-      { type: 'block', tag: TAGS.block },
-    ],
+    outbounds: profile.protocol === 'wireguard'
+      ? [{ type: 'direct', tag: TAGS.direct }, { type: 'block', tag: TAGS.block }]
+      : [
+          buildProxyOutbound(profile),
+          { type: 'direct', tag: TAGS.direct },
+          { type: 'block', tag: TAGS.block },
+        ],
     route: {
       rules: [],
       final: TAGS.proxy,
@@ -358,6 +537,9 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
       default_domain_resolver: { server: TAGS.localDns, strategy: DNS.strategy },
     },
   };
+  if (profile.protocol === 'wireguard') {
+    config.endpoints = [buildWireGuardEndpoint(profile, TAGS.proxy)];
+  }
 
   const rules = [];
   const blockQuic = settings.quic === true;
@@ -432,6 +614,11 @@ export function buildSelectableSingBoxConfig(inputProfiles, activeIndex = 0, set
 
   const config = buildSingBoxConfig(profiles[activeIndex], settings);
   const tags = profiles.map((_, index) => `profile-${index + 1}`);
+  const endpoints = profiles
+    .map((profile, index) => profile.protocol === 'wireguard'
+      ? buildWireGuardEndpoint(profile, tags[index])
+      : null)
+    .filter(Boolean);
   config.outbounds = [
     {
       type: 'selector',
@@ -440,10 +627,14 @@ export function buildSelectableSingBoxConfig(inputProfiles, activeIndex = 0, set
       default: tags[activeIndex],
       interrupt_exist_connections: true,
     },
-    ...profiles.map((profile, index) => buildProxyOutbound(profile, tags[index])),
+    ...profiles.flatMap((profile, index) => profile.protocol === 'wireguard'
+      ? []
+      : [buildProxyOutbound(profile, tags[index])]),
     { type: 'direct', tag: TAGS.direct },
     { type: 'block', tag: TAGS.block },
   ];
+  if (endpoints.length) config.endpoints = endpoints;
+  else delete config.endpoints;
 
   const uniqueServerRules = [];
   const serverRuleKeys = new Set();

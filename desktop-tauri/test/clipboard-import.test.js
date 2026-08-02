@@ -4,7 +4,10 @@ import test from 'node:test';
 import { classifyClipboardImport } from '../src/clipboard-import.js';
 
 test('recognizes supported profile links', () => {
-  for (const scheme of ['vless', 'trojan', 'hysteria2']) {
+  for (const scheme of [
+    'vless', 'trojan', 'hysteria2', 'hy2', 'vmess', 'ss',
+    'socks', 'socks5', 'wg', 'wireguard', 'tuic', 'hysteria',
+  ]) {
     assert.deepEqual(
       classifyClipboardImport(`  ${scheme}://example.com/config  `),
       { type: 'profile', value: `${scheme}://example.com/config` },

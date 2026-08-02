@@ -1,4 +1,7 @@
-const PROFILE_SCHEMES = new Set(['vless:', 'trojan:', 'hysteria2:']);
+const PROFILE_SCHEMES = new Set([
+  'vless:', 'trojan:', 'hysteria2:', 'hy2:', 'vmess:', 'ss:',
+  'socks:', 'socks5:', 'wg:', 'wireguard:', 'tuic:', 'hysteria:',
+]);
 
 export function classifyClipboardImport(value) {
   const text = String(value || '').trim();

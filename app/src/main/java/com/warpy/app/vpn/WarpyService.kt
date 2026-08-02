@@ -398,7 +398,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         }
 
         val targetIndex = profileTag.removePrefix("profile_").toIntOrNull()
-        if (settings.profiles.getOrNull(targetIndex ?: -1)?.protocol == Protocol.Hysteria2) {
+        if (settings.profiles.getOrNull(targetIndex ?: -1)?.protocol?.isUdpBased == true) {
             delay(HYSTERIA_RECOVERY_SETTLE_MS)
         }
         ensureSessionOperationCurrent(generation)
@@ -493,7 +493,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         }
         setActiveOutboundTag(preferredProfileTag)
 
-        if (profileProtocol(preferredProfileTag) == Protocol.Hysteria2) {
+        if (profileProtocol(preferredProfileTag)?.isUdpBased == true) {
             delay(HYSTERIA_RECOVERY_SETTLE_MS)
         }
         ensureSessionOperationCurrent(generation)
@@ -574,11 +574,11 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             )
         }
 
-        if (preferredProfile?.protocol == Protocol.Hysteria2 &&
+        if (preferredProfile?.protocol?.isUdpBased == true &&
             runtimeTag == preferredTag &&
             reason in setOf(ValidationReason.Initial, ValidationReason.Recovery)
         ) {
-            Log.i(TAG, "Hysteria2 selected — waiting 3s for UDP session before probe")
+            Log.i(TAG, "UDP profile selected — waiting 3s for the session before probe")
             delay(3_000)
         }
 
@@ -1227,7 +1227,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             }
 
             val refreshed = refreshCoreForRecovery(request.reason, failedAttempt + 1)
-            if (refreshed && activeProfileProtocol() == Protocol.Hysteria2) {
+            if (refreshed && activeProfileProtocol()?.isUdpBased == true) {
                 delay(HYSTERIA_RECOVERY_SETTLE_MS)
             }
             if (refreshed && hasActiveVpnTunnel() && probeForRecovery()) {

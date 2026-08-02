@@ -6,8 +6,27 @@ import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.assertFalse
+import java.util.Base64
 
 class ProfileParserTest {
+
+    @Test
+    fun testAutoDetectsCommonProfileProtocols() {
+        val vmessJson = """{"v":"2","ps":"VMess","add":"vmess.example.com","port":"443","id":"00000000-0000-4000-8000-000000000123","aid":"0","scy":"auto","net":"ws","host":"cdn.example.com","path":"/ws","tls":"tls","sni":"cdn.example.com"}"""
+        val vmess = "vmess://${Base64.getEncoder().encodeToString(vmessJson.toByteArray())}"
+        val fixtures = listOf(
+            vmess to Protocol.Vmess,
+            "ss://YWVzLTI1Ni1nY206c2VjcmV0@ss.example.com:8388#SS" to Protocol.Shadowsocks,
+            "socks5://user:pass@socks.example.com:1080#SOCKS" to Protocol.Socks,
+            "wg://wg.example.com:51820?pk=private&peer_pk=public&local_address=10.0.0.2%2F32#WG" to Protocol.WireGuard,
+            "tuic://00000000-0000-4000-8000-000000000123:secret@tuic.example.com:443?sni=tuic.example.com#TUIC" to Protocol.Tuic,
+            "hysteria://hy.example.com:443?auth=secret&peer=hy.example.com&upmbps=50&downmbps=100#Hysteria" to Protocol.Hysteria,
+        )
+
+        fixtures.forEach { (link, protocol) ->
+            assertEquals(protocol, ProfileParser.parse(link).getOrThrow().protocol)
+        }
+    }
 
     @Test
     fun testParseVlessReality() {
@@ -189,7 +208,7 @@ class ProfileParserTest {
     @Test
     fun testParseInvalidLinks() {
         val emptyLink = ""
-        val invalidScheme = "ss://method:pass@host:port"
+        val invalidScheme = "ssh://method:pass@host:port"
         val missingServer = "vless://uuid@:443"
         val missingUserInfo = "vless://@host:port"
 

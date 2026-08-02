@@ -23,10 +23,15 @@ object SingBoxConfigBuilder {
 
         val outbounds = JSONArray()
         val outboundTags = JSONArray()
+        val endpoints = JSONArray()
 
         settings.profiles.forEachIndexed { index, prof ->
             val tag = "profile_$index"
-            outbounds.put(prof.toOutbound(tag))
+            if (prof.protocol == Protocol.WireGuard) {
+                endpoints.put(prof.toWireGuardEndpoint(tag))
+            } else {
+                outbounds.put(prof.toOutbound(tag))
+            }
             outboundTags.put(tag)
         }
 
@@ -46,6 +51,7 @@ object SingBoxConfigBuilder {
             .put("dns", dns(settings))
             .put("inbounds", inbounds)
             .put("outbounds", outbounds)
+            .apply { if (endpoints.length() > 0) put("endpoints", endpoints) }
             .put("route", route(settings, filesDir))
             .toString(2)
     }
@@ -284,6 +290,103 @@ object SingBoxConfigBuilder {
                     )
                 }
             }
+
+        Protocol.Vmess -> JSONObject()
+            .put("type", "vmess")
+            .put("tag", customTag)
+            .put("server", server)
+            .put("server_port", port)
+            .put("uuid", uuid)
+            .put("security", encryption.ifBlank { "auto" })
+            .put("alter_id", alterId)
+            .put("packet_encoding", packetEncoding.takeIf { it.isNotBlank() })
+            .put("tls", tlsForGeneric())
+            .apply {
+                transportForProfile(transport, path, host, serviceName, xhttpMode)?.let {
+                    put("transport", it)
+                }
+            }
+
+        Protocol.Shadowsocks -> JSONObject()
+            .put("type", "shadowsocks")
+            .put("tag", customTag)
+            .put("server", server)
+            .put("server_port", port)
+            .put("method", encryption)
+            .put("password", password)
+
+        Protocol.Socks -> JSONObject()
+            .put("type", "socks")
+            .put("tag", customTag)
+            .put("server", server)
+            .put("server_port", port)
+            .put("version", "5")
+            .put("username", username.takeIf { it.isNotBlank() })
+            .put("password", password.takeIf { it.isNotBlank() })
+
+        Protocol.WireGuard -> error("WireGuard must be configured as an endpoint")
+
+        Protocol.Tuic -> JSONObject()
+            .put("type", "tuic")
+            .put("tag", customTag)
+            .put("server", server)
+            .put("server_port", port)
+            .put("uuid", uuid)
+            .put("password", password)
+            .put("congestion_control", congestionControl.ifBlank { "cubic" })
+            .put("udp_relay_mode", udpRelayMode.ifBlank { "native" })
+            .put("tls", tlsForGeneric(required = true))
+
+        Protocol.Hysteria -> JSONObject()
+            .put("type", "hysteria")
+            .put("tag", customTag)
+            .put("server", server)
+            .put("server_port", port)
+            .put("auth_str", password.takeIf { it.isNotBlank() })
+            .put("obfs", hysteria2ObfsPassword.takeIf { it.isNotBlank() })
+            .put("up_mbps", hysteria2UpMbps.takeIf { it > 0 })
+            .put("down_mbps", hysteria2DownMbps.takeIf { it > 0 })
+            .put("tls", tlsForGeneric(required = true))
+    }
+
+    private fun VpnProfile.toWireGuardEndpoint(customTag: String): JSONObject {
+        val peer = JSONObject()
+            .put("address", server)
+            .put("port", port)
+            .put("public_key", peerPublicKey)
+            .put("allowed_ips", JSONArray().put("0.0.0.0/0").put("::/0"))
+            .put("pre_shared_key", preSharedKey.takeIf { it.isNotBlank() })
+            .put("reserved", reservedBytes(reserved))
+        return JSONObject()
+            .put("type", "wireguard")
+            .put("tag", customTag)
+            .put("address", splitValues(localAddress))
+            .put("private_key", privateKey)
+            .put("peers", JSONArray().put(peer))
+            .put("mtu", mtu.takeIf { it > 0 })
+    }
+
+    private fun VpnProfile.tlsForGeneric(required: Boolean = false): JSONObject? {
+        val enabled = required || security.equals("tls", true)
+        if (!enabled) return null
+        return JSONObject()
+            .put("enabled", true)
+            .put("server_name", sni.ifBlank { server })
+            .put("insecure", allowInsecure)
+            .put("utls", JSONObject().put("enabled", true).put("fingerprint", fingerprint))
+    }
+
+    private fun splitValues(value: String): JSONArray = value
+        .split(',', ';')
+        .map(String::trim)
+        .filter(String::isNotBlank)
+        .fold(JSONArray()) { array, item -> array.put(item) }
+
+    private fun reservedBytes(value: String): JSONArray? {
+        if (value.isBlank()) return null
+        val bytes = value.split(',', ';')
+            .mapNotNull { it.trim().toIntOrNull()?.takeIf { byte -> byte in 0..255 } }
+        return bytes.takeIf { it.size == 3 }?.fold(JSONArray()) { array, byte -> array.put(byte) }
     }
 
     private fun VpnProfile.tlsForVless(): JSONObject {

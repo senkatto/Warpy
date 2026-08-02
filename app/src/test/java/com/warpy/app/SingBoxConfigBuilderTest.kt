@@ -4,8 +4,10 @@ import com.warpy.app.model.AppSettings
 import com.warpy.app.model.AppTunnelMode
 import com.warpy.app.model.Protocol
 import com.warpy.app.model.VpnProfile
+import com.warpy.app.data.ProfileParser
 import com.warpy.app.vpn.LocalProxyConfig
 import com.warpy.app.vpn.SingBoxConfigBuilder
+import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -21,6 +23,34 @@ class SingBoxConfigBuilderTest {
         password = "secret",
         allowInsecure = true,
     )
+
+    @Test
+    fun `auto detected protocols produce selectable sing box configs`() {
+        val vmessJson = """{"v":"2","ps":"VMess","add":"vmess.example.com","port":"443","id":"00000000-0000-4000-8000-000000000123","aid":"0","scy":"auto","net":"ws","host":"cdn.example.com","path":"/ws","tls":"tls","sni":"cdn.example.com"}"""
+        val links = listOf(
+            "vmess://${Base64.getEncoder().encodeToString(vmessJson.toByteArray())}" to "vmess",
+            "ss://YWVzLTI1Ni1nY206c2VjcmV0@ss.example.com:8388#SS" to "shadowsocks",
+            "socks5://user:pass@socks.example.com:1080#SOCKS" to "socks",
+            "wg://wg.example.com:51820?pk=private&peer_pk=public&local_address=10.0.0.2%2F32#WG" to "wireguard",
+            "tuic://00000000-0000-4000-8000-000000000123:secret@tuic.example.com:443?sni=tuic.example.com#TUIC" to "tuic",
+            "hysteria://hy.example.com:443?auth=secret&peer=hy.example.com&upmbps=50&downmbps=100#Hysteria" to "hysteria",
+        )
+
+        links.forEach { (link, expectedType) ->
+            val detected = ProfileParser.parse(link).getOrThrow()
+            val root = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(detected))))
+            val selector = root.getJSONArray("outbounds")
+                .let { outbounds -> (0 until outbounds.length()).map(outbounds::getJSONObject) }
+                .single { it.optString("tag") == "proxy" }
+
+            assertEquals("profile_0", selector.getJSONArray("outbounds").getString(0))
+            if (expectedType == "wireguard") {
+                assertEquals(expectedType, root.getJSONArray("endpoints").getJSONObject(0).getString("type"))
+            } else {
+                assertEquals(expectedType, root.getJSONArray("outbounds").getJSONObject(0).getString("type"))
+            }
+        }
+    }
 
     @Test
     fun `regular config does not expose a local proxy`() {

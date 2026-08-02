@@ -1,9 +1,15 @@
 package com.warpy.app.model
 
-enum class Protocol {
+enum class Protocol(val isUdpBased: Boolean = false) {
     Vless,
-    Hysteria2,
+    Hysteria2(isUdpBased = true),
     Trojan,
+    Vmess,
+    Shadowsocks,
+    Socks,
+    WireGuard(isUdpBased = true),
+    Tuic(isUdpBased = true),
+    Hysteria(isUdpBased = true),
 }
 
 enum class AppTunnelMode {
@@ -45,6 +51,19 @@ data class VpnProfile(
     val xhttpMode: String = "",
     val multiplex: Boolean = false,
     val group: String = "",
+    val username: String = "",
+    val encryption: String = "",
+    val alterId: Int = 0,
+    val packetEncoding: String = "",
+    val privateKey: String = "",
+    val peerPublicKey: String = "",
+    val preSharedKey: String = "",
+    val localAddress: String = "",
+    val reserved: String = "",
+    val mtu: Int = 0,
+    val congestionControl: String = "",
+    val udpRelayMode: String = "",
+    val raw: String = "",
 )
 
 data class AppSettings(

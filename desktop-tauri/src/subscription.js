@@ -5,9 +5,11 @@ export const MAX_SUBSCRIPTION_TEXT_LENGTH = 2 * 1024 * 1024;
 export const MAX_SUBSCRIPTION_PROFILES = 2000;
 export const AUTO_SUBSCRIPTION_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-const PROFILE_SCHEMES = /^(?:vless|trojan|hysteria2|hy2):\/\//i;
+const PROFILE_SCHEMES = /^(?:vless|trojan|hysteria2|hy2|vmess|ss|socks5?|wg|wireguard|tuic|hysteria):\/\//i;
 const ANY_URI_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
-const SING_BOX_PROTOCOLS = new Set(['vless', 'trojan', 'hysteria2']);
+const SING_BOX_PROTOCOLS = new Set([
+  'vless', 'trojan', 'hysteria2', 'vmess', 'shadowsocks', 'socks', 'wireguard', 'tuic', 'hysteria',
+]);
 const SING_BOX_TRANSPORTS = new Set(['tcp', 'raw', 'ws', 'grpc', 'http', 'httpupgrade', 'xhttp']);
 const CLASH_NETWORKS = new Map([
   ['tcp', 'tcp'],

@@ -77,8 +77,7 @@ internal object WarpyLocalization {
         "Не удалось прочитать настройки VPN" to "Could not read VPN settings",
         "Не удалось разобрать профили из подписки" to "Could not parse profiles from the subscription",
         "Не удалось разобрать ссылки" to "Could not parse the links",
-        "Не удалось распознать ссылку. Поддерживаются VLESS, Hysteria2 и Trojan." to
-            "Could not recognize the link. VLESS, Hysteria2 and Trojan are supported.",
+        "Не удалось распознать VPN-профиль." to "Could not recognize the VPN profile.",
         "Не удалось сохранить настройки" to "Could not save settings",
         "Не удалось установить соединение" to "Could not establish a connection",
         "Нет профиля" to "No profile",
@@ -100,8 +99,7 @@ internal object WarpyLocalization {
         "Ошибка подключения к VPN" to "VPN connection failed",
         "Ошибка: Порт занят другим приложением" to "Error: the port is used by another application",
         "Пинг" to "Ping",
-        "Поддерживаются vless://, hysteria2:// и trojan:// профили." to
-            "vless://, hysteria2:// and trojan:// profiles are supported.",
+        "Тип профиля определяется автоматически." to "The profile type is detected automatically.",
         "Поделиться профилем" to "Share profile",
         "Подключение" to "Connection",
         "Подключение..." to "Connecting...",
@@ -204,7 +202,7 @@ internal object WarpyLocalization {
         "VPN работает для всего телефона" to "VPN is used by the entire phone",
         "Запускаем VPN" to "Starting VPN",
         "Восстанавливаем VPN" to "Restoring VPN",
-        "QR найден, но это не профиль VLESS/Hysteria2" to "The QR code is not a VLESS or Hysteria2 profile",
+        "QR-код не содержит поддерживаемый VPN-профиль" to "The QR code does not contain a supported VPN profile",
     )
 
     private val chineseSimplified = mapOf(
@@ -331,7 +329,7 @@ internal object WarpyLocalization {
         "Не удалось выбрать новый профиль" to "无法选择新配置",
         "Не удалось подтвердить обмен данными через VPN-туннель" to "无法确认 VPN 隧道中的数据传输",
         "Не удалось прочитать настройки VPN" to "无法读取 VPN 设置",
-        "Не удалось распознать ссылку. Поддерживаются VLESS, Hysteria2 и Trojan." to "无法识别链接。支持 VLESS、Hysteria2 和 Trojan。",
+        "Не удалось распознать VPN-профиль." to "无法识别 VPN 配置。",
         "Не удалось сохранить настройки" to "无法保存设置",
         "Не удалось установить соединение" to "无法建立连接",
         "Ответ подписки слишком большой" to "订阅响应过大",
@@ -340,7 +338,7 @@ internal object WarpyLocalization {
         "Ошибка конфигурации профиля" to "配置设置错误",
         "Ошибка подключения к VPN" to "VPN 连接错误",
         "Ошибка: Порт занят другим приложением" to "错误：端口已被其他应用占用",
-        "Поддерживаются vless://, hysteria2:// и trojan:// профили." to "支持 vless://、hysteria2:// 和 trojan:// 配置。",
+        "Тип профиля определяется автоматически." to "自动识别配置类型。",
         "Превышено время ожидания сервера" to "服务器响应超时",
         "Проверить профиль" to "检查配置",
         "Проверка..." to "正在检查…",
@@ -371,7 +369,7 @@ internal object WarpyLocalization {
         "VPN не запустился" to "VPN 未能启动",
         "VPN не запустился: внутренний сервис не ответил" to "VPN 未能启动：内部服务无响应",
         "VPN не запустился: локальный порт проверки занят" to "VPN 未能启动：本地检测端口已被占用",
-        "QR найден, но это не профиль VLESS/Hysteria2" to "已识别二维码，但其中不是 VLESS/Hysteria2 配置",
+        "QR-код не содержит поддерживаемый VPN-профиль" to "二维码中没有受支持的 VPN 配置",
     )
 
     fun text(
@@ -408,7 +406,7 @@ internal object WarpyLocalization {
             source.startsWith("Базовая проверка пройдена: конфиг собран, DNS нашел ") ->
                 "Basic check passed: the configuration is valid and DNS resolved " +
                     source.substringAfter("DNS нашел ").substringBefore('.') +
-                    ". Hysteria2 uses UDP, so final verification runs when the VPN starts."
+                    ". This profile uses UDP, so final verification runs when the VPN starts."
             source.startsWith("Базовая проверка пройдена: конфиг собран, DNS работает, TCP ") ->
                 "Basic check passed: the configuration and DNS are valid; TCP " +
                     source.substringAfter("TCP ")

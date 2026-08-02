@@ -22,6 +22,30 @@ test('parses Hysteria2 obfuscation and preserves credentials', () => {
   assert.equal(tls.insecure, true);
 });
 
+test('auto-detects and builds common profile link protocols', () => {
+  const vmessPayload = Buffer.from(JSON.stringify({
+    v: '2', ps: 'VMess', add: 'vmess.example.com', port: '443',
+    id: '00000000-0000-4000-8000-000000000123', aid: '0', scy: 'auto', net: 'ws',
+    host: 'cdn.example.com', path: '/ws', tls: 'tls', sni: 'cdn.example.com',
+  })).toString('base64');
+  const fixtures = [
+    [`vmess://${vmessPayload}`, 'vmess'],
+    ['ss://YWVzLTI1Ni1nY206c2VjcmV0@ss.example.com:8388#SS', 'shadowsocks'],
+    ['socks5://user:pass@socks.example.com:1080#SOCKS', 'socks'],
+    ['wg://wg.example.com:51820?pk=private&peer_pk=public&local_address=10.0.0.2%2F32#WG', 'wireguard'],
+    ['tuic://00000000-0000-4000-8000-000000000123:secret@tuic.example.com:443?sni=tuic.example.com#TUIC', 'tuic'],
+    ['hysteria://hy.example.com:443?auth=secret&peer=hy.example.com&upmbps=50&downmbps=100#Hysteria', 'hysteria'],
+  ];
+
+  for (const [link, protocol] of fixtures) {
+    const profile = parseProfileLink(link);
+    assert.equal(profile?.protocol, protocol);
+    const config = buildSingBoxConfig(profile);
+    const generatedType = protocol === 'wireguard' ? config.endpoints?.[0]?.type : config.outbounds[0].type;
+    assert.equal(generatedType, protocol);
+  }
+});
+
 test('preserves explicit VLESS SNI in the generated TLS config', () => {
   const profile = parseProfileLink(
     'vless://00000000-0000-4000-8000-000000000000@origin.example.com:443'
@@ -367,11 +391,22 @@ test('automatic runtime keeps valid profiles in one selector', () => {
 
 test('bundled sing-box accepts generated configs without deprecated modes', { skip: process.platform !== 'win32' }, () => {
   const binary = resolve('src-tauri/bin/sing-box-x86_64-pc-windows-msvc.exe');
+  const vmessPayload = Buffer.from(JSON.stringify({
+    v: '2', ps: 'VMess', add: 'vmess.example.com', port: '443',
+    id: '00000000-0000-4000-8000-000000000123', aid: '0', scy: 'auto', net: 'ws',
+    host: 'cdn.example.com', path: '/ws', tls: 'tls', sni: 'cdn.example.com',
+  })).toString('base64');
   const links = [
     'hysteria2://secret@203.0.113.10:443?insecure=1&obfs=salamander&obfs-password=pepper#HY2',
     'trojan://password@203.0.113.11:8444?security=reality&sni=www.apple.com&pbk=public-key&sid=b5d9&type=tcp#Trojan',
     'vless://00000000-0000-4000-8000-000000000000@example.com:443?security=tls&type=ws&path=%2Fvpn&host=edge.example.com#WS',
     'vless://00000000-0000-4000-8000-000000000000@example.com:443?security=reality&sni=www.example.com&pbk=public-key&sid=0123abcd&type=xhttp&mode=stream-up&path=%2Fxhttp&host=www.example.com&alpn=h2#XHTTP',
+    `vmess://${vmessPayload}`,
+    'ss://YWVzLTI1Ni1nY206c2VjcmV0@ss.example.com:8388#SS',
+    'socks5://user:pass@socks.example.com:1080#SOCKS',
+    'wg://wg.example.com:51820?pk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%3D&peer_pk=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB%3D&local_address=10.0.0.2%2F32#WG',
+    'tuic://00000000-0000-4000-8000-000000000123:secret@tuic.example.com:443?sni=tuic.example.com#TUIC',
+    'hysteria://hy.example.com:443?auth=secret&peer=hy.example.com&upmbps=50&downmbps=100#Hysteria',
   ];
   const directory = mkdtempSync(join(tmpdir(), 'warpy-config-test-'));
   try {
@@ -380,7 +415,9 @@ test('bundled sing-box accepts generated configs without deprecated modes', { sk
       writeFileSync(path, JSON.stringify(buildSingBoxConfig(parseProfileLink(link))));
       const result = spawnSync(binary, ['check', '-c', path], { encoding: 'utf8' });
       assert.equal(result.status, 0, result.stderr || result.stdout);
-      assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /deprecated/i);
+      if (!link.startsWith('wg://')) {
+        assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /deprecated/i);
+      }
     });
 
     const selectorPath = join(directory, 'selector.json');

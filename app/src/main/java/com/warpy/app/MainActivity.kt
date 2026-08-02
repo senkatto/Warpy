@@ -1665,6 +1665,12 @@ private fun Protocol.label(): String = when (this) {
     Protocol.Vless -> "VLESS"
     Protocol.Hysteria2 -> "Hysteria2"
     Protocol.Trojan -> "Trojan"
+    Protocol.Vmess -> "VMess"
+    Protocol.Shadowsocks -> "Shadowsocks"
+    Protocol.Socks -> "SOCKS"
+    Protocol.WireGuard -> "WireGuard"
+    Protocol.Tuic -> "TUIC"
+    Protocol.Hysteria -> "Hysteria"
 }
 
 @Composable
@@ -2371,7 +2377,7 @@ private fun AddProfileDialog(
                         importError = if (text.isBlank()) {
                             "Буфер обмена пуст."
                         } else {
-                            "Не удалось распознать ссылку. Поддерживаются VLESS, Hysteria2 и Trojan."
+                            "Не удалось распознать VPN-профиль."
                         }
                     }
                 }
@@ -2382,7 +2388,7 @@ private fun AddProfileDialog(
                     cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                 }
                 Text(
-                    "Поддерживаются vless://, hysteria2:// и trojan:// профили.",
+                    "Тип профиля определяется автоматически.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -2473,7 +2479,7 @@ private fun QrScannerScreen(onResult: (String) -> Boolean, onBack: () -> Unit) {
                                 ContextCompat.getMainExecutor(context).execute {
                                     val imported = currentOnResult(value)
                                     if (!imported) {
-                                        hintText = "QR найден, но это не профиль VLESS/Hysteria2"
+                                        hintText = "QR-код не содержит поддерживаемый VPN-профиль"
                                         handled.set(false)
                                     }
                                 }
@@ -2715,8 +2721,8 @@ private fun checkProfile(settings: AppSettings): String {
         .getOrElse { return "DNS не нашел сервер ${profile.server}: ${it.message.orEmpty().ifBlank { it::class.java.simpleName }}" }
     if (resolved.isEmpty()) return "DNS не вернул адреса для ${profile.server}."
 
-    if (profile.protocol == Protocol.Hysteria2) {
-        return "Базовая проверка пройдена: конфиг собран, DNS нашел ${resolved.first().hostAddress}. Hysteria2 работает по UDP, поэтому окончательная проверка идет при запуске VPN."
+    if (profile.protocol.isUdpBased) {
+        return "Базовая проверка пройдена: конфиг собран, DNS нашел ${resolved.first().hostAddress}. Профиль работает по UDP, поэтому окончательная проверка идет при запуске VPN."
     }
 
     val startedAt = System.nanoTime()
@@ -3586,7 +3592,9 @@ private fun createQrBitmap(value: String, size: Int): Bitmap {
     }
 }
 
-private fun VpnProfile.toShareLink(): String = when (protocol) {
+private fun VpnProfile.toShareLink(): String {
+    if (raw.isNotBlank()) return raw
+    return when (protocol) {
     Protocol.Vless -> {
         val params = buildQuery(
             "security" to security,
@@ -3624,6 +3632,13 @@ private fun VpnProfile.toShareLink(): String = when (protocol) {
         )
         "trojan://${encodeLinkPart(password)}@$server:$port$params#${encodeLinkPart(displayName())}"
     }
+    Protocol.Vmess,
+    Protocol.Shadowsocks,
+    Protocol.Socks,
+    Protocol.WireGuard,
+    Protocol.Tuic,
+    Protocol.Hysteria -> ""
+    }
 }
 
 private fun buildQuery(vararg params: Pair<String, String>): String {
@@ -3641,6 +3656,12 @@ private fun VpnProfile.safeTitle(): String {
         Protocol.Vless -> "VLESS"
         Protocol.Hysteria2 -> "Hysteria2"
         Protocol.Trojan -> "Trojan"
+        Protocol.Vmess -> "VMess"
+        Protocol.Shadowsocks -> "Shadowsocks"
+        Protocol.Socks -> "SOCKS"
+        Protocol.WireGuard -> "WireGuard"
+        Protocol.Tuic -> "TUIC"
+        Protocol.Hysteria -> "Hysteria"
     }
     val location = if (name.isNotBlank()) name else if (sni.isNotBlank()) sni else server
     return "$protocolName • $location"

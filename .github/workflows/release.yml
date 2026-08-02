@@ -1,0 +1,194 @@
+name: Warpy release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Validate Android release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_name="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts | head -n 1)"
+          test -n "$version_name"
+          test "v$version_name" = "$GITHUB_REF_NAME" || {
+            echo "Tag $GITHUB_REF_NAME does not match Android version $version_name"
+            exit 1
+          }
+
+      - name: Decode production keystore
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${{ secrets.WARPY_KEYSTORE_BASE64 }}"
+          printf '%s' "${{ secrets.WARPY_KEYSTORE_BASE64 }}" | base64 --decode > "$RUNNER_TEMP/warpy-release.jks"
+          test -s "$RUNNER_TEMP/warpy-release.jks"
+
+      - name: Verify Android source and tests
+        env:
+          RELEASE_STORE_FILE: ${{ runner.temp }}/warpy-release.jks
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon :app:checkMojibakeText :app:testProductionUnitTest :app:lintProduction
+
+      - name: Build production APK
+        env:
+          RELEASE_STORE_FILE: ${{ runner.temp }}/warpy-release.jks
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon --stacktrace :app:assembleProduction
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/production/app-production.apk"
+          test -f "$apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$apksigner"
+          "$apksigner" verify --verbose --print-certs "$apk"
+          cp "$apk" Warpy-Android.apk
+
+      - name: Upload Android release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: Warpy-Android.apk
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        working-directory: desktop-tauri
+
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop-tauri/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Windows release version
+        id: release
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw 'TAURI_SIGNING_PRIVATE_KEY is not configured.'
+          }
+          $package = Get-Content package.json | ConvertFrom-Json
+          if ("v$($package.version)" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match Windows version $($package.version)."
+          }
+          $cargoVersion = (Select-String -Path src-tauri\Cargo.toml -Pattern '^version = "([^"]+)"$').Matches[0].Groups[1].Value
+          $tauriVersion = (Get-Content src-tauri\tauri.conf.json | ConvertFrom-Json).version
+          if ($package.version -ne $cargoVersion -or $package.version -ne $tauriVersion) {
+            throw 'Windows version files do not match.'
+          }
+          "version=$($package.version)" >> $env:GITHUB_OUTPUT
+
+      - name: Verify Windows source and tests
+        shell: pwsh
+        run: |
+          node --check src\index.js
+          npm test
+          npm audit --omit=dev
+          cargo fmt --manifest-path src-tauri\Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri\Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path src-tauri\Cargo.toml --all-targets
+          .\scripts\verify-core-provenance.ps1
+
+      - name: Build signed Windows updater
+        run: npm run build:updater
+
+      - name: Prepare Windows release assets
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_CHANNEL: stable
+        run: .\scripts\prepare-release-assets.ps1
+
+      - name: Upload Windows release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: desktop-tauri/release-assets/*
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - android
+      - windows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download verified release assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify complete release
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s release-assets/Warpy-Android.apk
+          test -s release-assets/Warpy-Windows.exe
+          test -s release-assets/latest.json
+
+      - name: Publish unified GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Warpy ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            ## Установщики
+
+            - **Android:** `Warpy-Android.apk` (Android 8.0+, ARM64)
+            - **Windows:** `Warpy-Windows.exe` (Windows 10/11, x64)
+
+            Android и Windows используют одну версию релиза.
+          files: |
+            release-assets/Warpy-Android.apk
+            release-assets/Warpy-Windows.exe
+            release-assets/latest.json

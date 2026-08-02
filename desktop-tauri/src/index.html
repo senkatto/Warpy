@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Warpy</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="stylesheet" href="index.css?v=1.0.0">
+</head>
+<body>
+  <div id="app">
+    <!-- Top Actions Bar -->
+    <div class="top-bar" data-tauri-drag-region>
+      <div class="logo">
+        <svg viewBox="0 0 1869.79 343.17" xmlns="http://www.w3.org/2000/svg" fill="#FFFFFF">
+          <!-- Exact Vector Path from Android drawable/wapry_logo -->
+          <path d="M1166.65,159.68c9.64-4.04,16.41-10.66,20.31-19.84,3.89-9.18,5.84-20.31,5.84-33.38v-21.48c0-23.03-6.62-41.79-19.84-56.26-13.23-14.47-37.28-21.71-72.14-21.71h-155.48c-5.92,0-10.2,1.33-12.84,3.97-2.65,2.65-3.97,6.93-3.97,12.84v302.55c0,5.92,1.32,10.2,3.97,12.84,2.64,2.65,6.92,3.97,12.84,3.97h71.9c5.91,0,10.19-1.32,12.84-3.97,2.64-2.64,3.97-6.92,3.97-12.84v-91.51h65.37c6.54,0,11.13,1.63,13.77,4.9,2.64,3.27,3.97,8.33,3.97,15.17v71.43c0,5.92,1.32,10.2,3.97,12.84,2.64,2.65,6.92,3.97,12.84,3.97h72.37c5.91,0,10.19-1.32,12.84-3.97,2.64-2.64,3.97-6.92,3.97-12.84v-98.98c0-19.61-5.22-35.32-15.64-47.16-10.43-11.83-24.05-18.68-40.85-20.54ZM1089.61,128.86c0,6.23-1.4,11.44-4.2,15.64-2.8,4.2-8.25,6.3-16.34,6.3h-35.02v-59.76h35.02c8.09,0,13.54,2.1,16.34,6.31,2.8,4.2,4.2,9.42,4.2,15.64v15.87Z" />
+          <path d="M1435.11,7h-142.87c-5.92,0-10.2,1.33-12.84,3.97-2.65,2.65-3.97,6.93-3.97,12.84v302.55c0,5.92,1.32,10.2,3.97,12.84,2.64,2.65,6.92,3.97,12.84,3.97h72.37c5.91,0,10.19-1.32,12.84-3.97,2.64-2.64,3.97-6.92,3.97-12.84v-77.5h53.69c42.33,0,71.28-8.4,86.84-25.21,15.56-16.81,23.35-38.75,23.35-65.83v-59.76c0-27.08-7.79-49.02-23.35-65.83-15.57-16.81-44.52-25.21-86.84-25.21ZM1444.45,141.94c0,5.92-1.4,11.21-4.2,15.87-2.8,4.67-8.72,7-17.74,7h-42.02v-70.5h42.02c9.02,0,14.94,2.33,17.74,7,2.8,4.67,4.2,9.97,4.2,15.88v24.75Z" />
+          <path d="M1865.82,10.97c-2.65-2.64-6.93-3.97-12.84-3.97h-69.57c-5.92,0-10.2,1.33-12.84,3.97-2.65,2.65-3.97,6.93-3.97,12.84v76.57c0,3.12-.16,6.38-.47,9.8-.31,3.43-1.56,6.7-3.74,9.8l-21.48,33.62c-1.56,2.8-3.2,4.83-4.9,6.07-1.71,1.25-3.82,1.87-6.3,1.87h-4.67c-2.49,0-4.6-.62-6.3-1.87-1.71-1.24-3.35-3.27-4.9-6.07l-21.48-33.62c-2.18-3.11-3.43-6.38-3.74-9.8-.31-3.42-.47-6.69-.47-9.8V23.81c0-5.91-1.33-10.19-3.97-12.84-2.65-2.64-6.93-3.97-12.84-3.97h-71.9c-5.92,0-10.2,1.33-12.84,3.97-2.65,2.65-3.97,6.93-3.97,12.84v89.65c0,14.32,1.17,25.06,3.5,32.21,2.34,7.17,7.08,15.57,14.24,25.21l71.44,95.71v59.76c0,5.92,1.32,10.2,3.97,12.84,2.64,2.65,6.92,3.97,12.84,3.97h75.64c5.91,0,10.19-1.32,12.84-3.97,2.64-2.64,3.97-6.92,3.97-12.84v-59.3l70.97-96.18c6.84-9.65,11.51-18.05,14.01-25.21,2.49-7.16,3.74-17.9,3.74-32.21V23.81c0-5.91-1.33-10.19-3.97-12.84Z" />
+          <path d="M838.89,26.38c-10.59-8.24-25.14-14.71-43.65-19.37-18.52-4.67-42.25-7-71.2-7s-52.61,2.33-70.97,7c-18.37,4.67-32.76,11.13-43.19,19.37-10.43,8.25-17.59,18.29-21.48,30.12-3.9,11.83-5.84,24.74-5.84,38.75v231.11c0,5.92,1.32,10.2,3.97,12.84,2.64,2.65,6.92,3.97,12.84,3.97h68.63c5.91,0,10.19-1.32,12.84-3.97v-69.57h77.04v69.57c0,5.92,1.32,10.2,3.97,12.84,2.64,2.65,6.92,3.97,12.84,3.97h70.97c5.91,0,10.19-1.32,12.84-3.97s3.97-6.92,3.97-12.84V95.25c0-14.01-1.95-26.92-5.84-38.75-3.9-11.83-11.13-21.86-21.71-30.12ZM761.85,171.35h-77.04v-60.23c0-6.22,2.33-11.44,7-15.64,4.67-4.2,15.25-6.3,31.75-6.3s26.61,2.1,31.28,6.3c4.67,4.2,7,9.42,7,15.64v60.23Z" />
+          <path d="M147.74,40.62h133.68c9.28,0,16.81-7.53,16.81-16.81s-7.53-16.81-16.81-16.81h-133.68c-9.28,0-16.81,7.53-16.81,16.81s7.53,16.81,16.81,16.81Z" />
+          <path d="M507.86,7h-69.57c-5.92,0-10.2,1.33-12.84,3.97-2.65,2.65-3.97,6.93-3.97,12.84v171.82l-27.08-58.83c-2.49-5.29-5.76-9.02-9.8-11.2-4.05-2.18-9.03-3.27-14.94-3.27h-19.61c-5.92,0-10.9,1.09-14.94,3.27-4.05,2.18-7.32,5.92-9.8,11.2l-27.08,58.83v-107.46c0-7.69-6.24-13.93-13.93-13.93H99.29c-9.28,0-16.81,7.53-16.81,16.81s7.53,16.81,16.81,16.81h150.49c8.78,0,16.62,6.42,17.45,15.16.96,10.02-6.9,18.46-16.73,18.46H16.81c-9.28,0-16.81,7.53-16.81,16.81s7.53,16.81,16.81,16.81h215.45c8.78,0,16.62,6.42,17.45,15.16.96,10.02-6.9,18.46-16.73,18.46h-86.58c-9.28,0-16.81,7.53-16.81,16.81s7.53,16.81,16.81,16.81h118.52c8.78,0,16.62,6.42,17.45,15.16.96,10.02-6.9,18.46-16.73,18.46H99.29c-9.28,0-16.81,7.53-16.81,16.81s7.53,16.81,16.81,16.81h119.07l6.09,16.81c1.55,4.98,4.12,9.03,7.7,12.14,3.58,3.11,7.86,4.67,12.84,4.67h61.63c4.98,0,9.18-1.17,12.61-3.5,3.42-2.33,5.76-5.84,7-10.5l21.94-76.11c.93-3.11,2.1-5.21,3.5-6.3,1.4-1.09,3.04-1.63,4.9-1.63h4.2c1.87,0,3.5.55,4.9,1.63,1.4,1.09,2.57,3.2,3.5,6.3l21.48,76.11c1.24,4.98,3.89,8.56,7.94,10.74,4.04,2.18,8.56,3.27,13.54,3.27h62.1c4.98,0,8.94-1.64,11.91-4.9,2.95-3.27,5.21-7.24,6.77-11.91l23.34-63.5c4.04-11.51,6.46-21.55,7.24-30.12.77-8.56,1.17-17.82,1.17-27.78V23.81c0-5.91-1.33-10.19-3.97-12.84-2.65-2.64-6.93-3.97-12.84-3.97Z" />
+        </svg>
+      </div>
+      <div class="top-buttons">
+        <button class="round-btn" id="btn-add" title="Добавить профиль">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button class="round-btn" id="btn-speed" title="Замерить скорость">
+          <!-- High-fidelity Speedometer Icon matching Android -->
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a10 10 0 0 0-10 10 10 10 0 0 0 9.3 9.9M12 2a10 10 0 0 1 10 10 10 10 0 0 1-5 8.7"/>
+            <circle cx="12" cy="12" r="1"/>
+            <path d="m12 12 5-5"/>
+          </svg>
+        </button>
+        <button class="round-btn" id="btn-settings" title="Настройки">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l-.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <button class="win-btn" id="win-min" title="Свернуть">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+        <button class="win-btn win-close" id="win-close" title="Закрыть">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <aside class="update-banner hidden" id="update-banner" aria-live="polite">
+      <div class="update-banner-copy">
+        <strong id="update-banner-title"></strong>
+        <span id="update-banner-detail"></span>
+        <div class="update-banner-track" aria-hidden="true">
+          <span id="update-banner-progress"></span>
+        </div>
+      </div>
+      <div class="update-banner-actions">
+        <button id="update-banner-later" type="button" data-i18n="updateLater">Позже</button>
+        <button id="update-banner-install" type="button" data-i18n="updateInstall">Установить</button>
+      </div>
+    </aside>
+
+    <!-- Central Connect Area -->
+    <div class="connect-area">
+      <div class="circle-container">
+        <canvas id="particles" width="238" height="238"></canvas>
+        <!-- Power Button -->
+        <button class="power-btn" id="power-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+            <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
+            <line x1="12" y1="2" x2="12" y2="12"/>
+          </svg>
+          <span class="power-empty-label" data-i18n="addProfile">Добавить профиль</span>
+        </button>
+        <div class="uptime" id="uptime"></div>
+        <div class="status-alert" id="status-alert">Подключено</div>
+        <div class="spinner-container hidden" id="spinner-container">
+          <svg class="mega-spinner" viewBox="0 0 50 50">
+            <circle class="spinner-track" cx="25" cy="25" r="20" fill="none" stroke-width="3"></circle>
+            <circle class="spinner-path" cx="25" cy="25" r="20" fill="none" stroke-width="3"></circle>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Info Below Circle -->
+    <div class="info-section">
+      <div class="server-name" id="server-name">Добавьте профиль кнопкой +</div>
+      <div class="protocol-chip" id="protocol-chip" style="display:none;"></div>
+      <div class="metrics" id="metrics" style="display:none;">
+        <div class="metric-row">
+          <span class="metric-label" id="m-speed-label">Скорость</span>
+          <span class="metric-val" id="m-speed">0</span>
+          <span class="metric-unit" id="m-speed-unit">КБ/с</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label" id="m-ping-label">Пинг</span>
+          <span class="metric-val" id="m-ping">—</span>
+          <span class="metric-unit" id="m-ping-unit">мс</span>
+        </div>
+      </div>
+      <div class="error-msg" id="error-msg"></div>
+    </div>
+
+    <!-- Bottom Profile Selector -->
+    <div class="bottom-bar" id="btn-profiles">
+      <span class="bottom-chip" id="bottom-chip"></span>
+      <span class="bottom-flag hidden" id="bottom-flag" aria-hidden="true"></span>
+      <span class="bottom-name" id="bottom-name">Список пуст</span>
+      <svg class="bottom-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+    </div>
+
+    <!-- OVERLAYS -->
+    <!-- Profiles Drawer -->
+    <div id="overlay-profiles" class="overlay overlay-bottom hidden">
+      <div class="overlay-bg"></div>
+      <div class="drawer">
+        <div class="drawer-head profiles-drawer-head">
+          <div class="profiles-head-main">
+            <span id="profiles-drawer-title">Профили</span>
+            <button class="profiles-add-btn" id="profiles-add-btn" type="button" data-i18n="addProfile">Добавить профиль</button>
+          </div>
+          <button class="profiles-back-btn hidden" id="profiles-back-btn" type="button" data-i18n="back">Назад</button>
+          <button class="x-btn" id="close-profiles">✕</button>
+        </div>
+        <div class="drawer-list" id="profile-list"></div>
+      </div>
+    </div>
+
+    <!-- Share Profile Dialog -->
+    <div id="overlay-share" class="overlay hidden">
+      <div class="overlay-bg"></div>
+      <div class="dialog dialog-share">
+        <div class="drawer-head"><span data-i18n="shareTitle">Поделиться</span><button class="x-btn" id="close-share">✕</button></div>
+        <div class="share-body">
+          <div class="qr-container">
+            <img id="share-qr" src="" alt="QR" />
+          </div>
+          <textarea id="share-link" readonly></textarea>
+          <button class="btn-primary" id="btn-copy-share" data-i18n="copy">Копировать</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Profile Dialog -->
+    <div id="overlay-add" class="overlay hidden">
+      <div class="overlay-bg"></div>
+      <div class="dialog">
+        <h3 data-i18n="addProfile">Добавить профиль</h3>
+        <p class="hint" data-i18n="clipboardHint">Warpy сам определит конфигурацию или HTTPS-ссылку подписки</p>
+
+        <button class="btn-clipboard-import" id="btn-clipboard-import">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:24px;height:24px;margin-bottom:4px;">
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+            <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+          </svg>
+          <span data-i18n="addClipboardBtn">Добавить из буфера обмена</span>
+        </button>
+
+        <div class="dialog-btns">
+          <button class="btn-secondary" id="cancel-add" style="width:100%" data-i18n="cancel">Отмена</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Overlay -->
+    <div id="overlay-settings" class="overlay hidden">
+      <div class="overlay-bg"></div>
+      <div class="dialog dialog-settings">
+        <div class="settings-drag-bar" data-tauri-drag-region></div>
+        <div class="drawer-head" id="settings-main-header" data-tauri-drag-region><button class="x-btn back-btn" id="close-settings">✕</button><span data-i18n="settings" data-tauri-drag-region>Настройки</span></div>
+        <div class="drawer-head hidden" id="settings-tunneling-header" data-tauri-drag-region><button class="x-btn back-btn" id="close-tunneling">←</button><span data-i18n="routingSection" data-tauri-drag-region>Туннелирование</span></div>
+        <div class="settings-body" id="settings-main-page">
+          <section class="settings-section settings-primary-list">
+            <button class="settings-nav-row" id="btn-open-tunneling" type="button">
+              <span class="settings-nav-icon" aria-hidden="true">⇄</span>
+              <span class="setting-copy">
+                <span class="s-title" data-i18n="routingSection">Туннелирование</span>
+                <span class="s-description" data-i18n="routingDescription">Приложения и сайты с отдельными правилами</span>
+              </span>
+              <span class="settings-nav-chevron" aria-hidden="true">›</span>
+            </button>
+            <label class="setting setting-rich">
+              <span class="setting-copy">
+                <span class="s-title" data-i18n="resumeOnBoot">Подключаться после запуска Windows</span>
+                <span class="s-description" data-i18n="resumeOnBootDescription">Восстанавливает защищённое соединение автоматически</span>
+              </span>
+              <input type="checkbox" id="s-resume-on-boot"><span class="toggle"></span>
+            </label>
+            <div class="setting-stack">
+              <label class="setting setting-rich">
+                <span class="setting-copy">
+                  <span class="setting-title-line">
+                    <span class="s-title" data-i18n="killSwitch">Блокировать интернет при обрыве VPN</span>
+                    <span class="setting-help" tabindex="0" data-tooltip-i18n="killSwitchTooltip">?</span>
+                  </span>
+                  <span class="s-description" data-i18n="killSwitchDescription">Не позволяет трафику незаметно уйти напрямую</span>
+                </span>
+                <input type="checkbox" id="s-kill-switch"><span class="toggle"></span>
+              </label>
+              <div class="setting-status" id="kill-switch-status" data-state="off"></div>
+            </div>
+            <label class="setting setting-rich">
+              <span class="setting-copy">
+                <span class="s-title" data-i18n="lan">Доступ к домашней сети</span>
+                <span class="s-description" data-i18n="lanDescription">Принтеры, телевизоры и другие устройства остаются доступны</span>
+              </span>
+              <input type="checkbox" id="s-lan"><span class="toggle"></span>
+            </label>
+            <label class="setting setting-rich">
+              <span class="setting-copy">
+                <span class="setting-title-line">
+                  <span class="s-title" data-i18n="quic">Совместимость QUIC</span>
+                  <span class="setting-help" tabindex="0" data-tooltip-i18n="quicTooltip">?</span>
+                </span>
+                <span class="s-description" data-i18n="quicDescription">Отключает QUIC, если сайты нестабильно работают через UDP</span>
+              </span>
+              <input type="checkbox" id="s-quic"><span class="toggle"></span>
+            </label>
+            <div class="setting mtu-row">
+              <span class="setting-copy">
+                <span class="setting-title-line">
+                  <span class="s-title">MTU</span>
+                  <span class="setting-help" tabindex="0" data-tooltip-i18n="mtuTooltip">?</span>
+                </span>
+                <span class="s-description" data-i18n="mtuDescription">Оставьте автоматически, если поддержка не попросила другое значение</span>
+              </span>
+              <input type="number" id="s-mtu" value="0" min="0" max="1500">
+            </div>
+          </section>
+
+          <button class="language-setting-row" id="btn-language" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"></path>
+            </svg>
+            <span class="language-setting-title s-title" data-i18n="lang">Язык</span>
+            <span class="language-setting-value" id="language-setting-value">Русский</span>
+            <svg class="language-setting-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          </button>
+          <input id="s-lang" type="hidden" value="en">
+
+          <section class="settings-section settings-update-section">
+            <button class="update-check" id="btn-check-update" type="button">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M20 12a8 8 0 1 1-2.34-5.66"></path>
+                <path d="M20 4v6h-6"></path>
+              </svg>
+              <span data-i18n="checkUpdates">Проверить обновления</span>
+            </button>
+            <div class="update-status" id="update-status" aria-live="polite"></div>
+          </section>
+        </div>
+
+        <div class="settings-body hidden" id="settings-tunneling-page">
+          <section class="settings-section settings-tunneling-section">
+            <div class="setting-group">
+              <div class="setting-group-header">
+                <span class="setting-copy">
+                  <span class="s-title" data-i18n="apps">Приложения</span>
+                </span>
+                <select id="s-apps-mode" class="app-select">
+                  <option value="off" data-i18n="appsOff">Все через VPN</option>
+                  <option value="only" data-i18n="appsOnly">Только выбранные</option>
+                  <option value="bypass" data-i18n="appsBypass">Кроме выбранных</option>
+                </select>
+              </div>
+              <div class="app-actions-row">
+                <button class="btn-action-small" id="btn-app-browse" data-i18n="browse">Выбрать файл</button>
+                <button class="btn-action-small" id="btn-app-running" data-i18n="running">Из запущенных</button>
+              </div>
+              <textarea id="s-apps-list" placeholder="Пример: chrome.exe, telegram.exe" class="small-textarea" data-i18n="appsListPlaceholder"></textarea>
+            </div>
+            <div class="setting-group">
+              <div class="setting-group-header">
+                <span class="setting-copy">
+                  <span class="s-title" data-i18n="sites">Сайты</span>
+                </span>
+                <select id="s-sites-mode" class="app-select">
+                  <option value="off" data-i18n="sitesOff">Все через VPN</option>
+                  <option value="only" data-i18n="sitesOnly">Только выбранные</option>
+                  <option value="bypass" data-i18n="sitesBypass">Кроме выбранных</option>
+                </select>
+              </div>
+              <textarea id="s-sites-list" placeholder="Пример: instagram.com, youtube.com" class="small-textarea" data-i18n="sitesListPlaceholder"></textarea>
+            </div>
+          </section>
+        </div>
+        <div class="dialog-btns" style="margin-top: 12px;">
+          <button class="btn-primary" id="btn-save-settings" data-i18n="saveBtn" style="width: 100%;">Сохранить</button>
+        </div>
+        <div class="settings-version" id="settings-version"></div>
+      </div>
+    </div>
+
+    <div id="overlay-language" class="overlay hidden">
+      <div class="overlay-bg"></div>
+      <div class="dialog dialog-language">
+        <div class="drawer-head"><span data-i18n="lang">Язык</span><button class="x-btn" id="close-language">✕</button></div>
+        <div class="language-options">
+          <button type="button" data-language="ru"><span>Русский</span><span class="language-check">✓</span></button>
+          <button type="button" data-language="en"><span>English</span><span class="language-check">✓</span></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Speedtest Dialog -->
+    <div id="overlay-speedtest" class="overlay hidden">
+      <div class="overlay-bg"></div>
+      <div class="dialog dialog-speedtest">
+        <div id="speedtest-content" class="speedtest-body">
+
+          <!-- Running State: Gauge -->
+          <div id="speedtest-running-area" class="speedtest-gauge-area">
+            <canvas id="speedtest-canvas" width="200" height="200"></canvas>
+            <div class="speedtest-gauge-text">
+              <div class="gauge-label" id="speedtest-stage">ПОДГОТОВКА</div>
+              <div class="gauge-value" id="speedtest-live-val">0<span class="gauge-unit">Мбит/с</span></div>
+            </div>
+          </div>
+
+          <!-- Finished State: Three rows -->
+          <div id="speedtest-results-area" class="speedtest-results hidden">
+            <div class="speedtest-res-row download-row">
+              <span class="speedtest-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v14M7 13l5 5 5-5"/></svg></span>
+              <span class="speedtest-res-val" id="speedtest-res-down">—</span>
+              <span class="speedtest-res-unit" data-i18n="mbps">Мбит/с</span>
+            </div>
+            <div class="speedtest-res-row upload-row">
+              <span class="speedtest-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V6M7 11l5-5 5 5"/></svg></span>
+              <span class="speedtest-res-val" id="speedtest-res-up">—</span>
+              <span class="speedtest-res-unit" data-i18n="mbps">Мбит/с</span>
+            </div>
+            <div class="speedtest-res-row ping-row">
+              <span class="speedtest-arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/></svg></span>
+              <span class="speedtest-res-val" id="speedtest-res-ping">—</span>
+              <span class="speedtest-res-unit" data-i18n="ms">мс</span>
+            </div>
+          </div>
+
+        </div>
+        <div class="dialog-btns">
+          <button class="btn-secondary" id="speedtest-btn-close" data-i18n="close">Закрыть</button>
+          <button class="btn-primary" id="speedtest-btn-action" data-i18n="speedtestBtnStart">Запустить</button>
+        </div>
+      </div>
+    </div>
+    <!-- Running Apps Selector Dialog -->
+    <div id="overlay-running-apps" class="overlay hidden">
+      <div class="overlay-bg"></div>
+      <div class="dialog dialog-running-apps">
+        <div class="drawer-head"><span data-i18n="runningAppsTitle">Выберите программы</span><button class="x-btn" id="close-running-apps">✕</button></div>
+
+        <div class="running-apps-controls">
+          <input type="text" id="running-apps-search" placeholder="Поиск по названию..." class="search-input" data-i18n="searchPlaceholder">
+          <label class="setting system-checkbox-label">
+            <span class="s-title-small" data-i18n="excludeSystem">Исключить системные</span>
+            <input type="checkbox" id="running-apps-exclude-system" checked>
+            <span class="toggle"></span>
+          </label>
+        </div>
+
+        <div class="running-apps-list" id="running-apps-list">
+          <!-- loaded dynamically -->
+        </div>
+
+        <div class="dialog-btns">
+          <button class="btn-secondary" id="cancel-running-apps" data-i18n="cancel">Отмена</button>
+          <button class="btn-primary" id="confirm-running-apps" data-i18n="confirm">Добавить</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Confirm Dialog -->
+    <div id="overlay-confirm" class="overlay hidden">
+      <div class="overlay-bg"></div>
+      <div class="dialog dialog-confirm">
+        <div class="confirm-message" id="confirm-msg"></div>
+        <div class="dialog-btns">
+          <button class="btn-secondary" id="btn-confirm-cancel" data-i18n="cancel">Отмена</button>
+          <button class="btn-primary" id="btn-confirm-ok" data-i18n="yes">Да</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Message Dialog -->
+    <div id="overlay-message" class="overlay hidden">
+      <div class="overlay-bg"></div>
+      <div class="dialog dialog-confirm dialog-message">
+        <div class="confirm-message" id="message-msg"></div>
+        <div class="dialog-btns">
+          <button class="btn-primary" id="btn-message-ok" data-i18n="ok">ОК</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Connection Diagnostic Report -->
+    <div id="overlay-connection-report" class="overlay hidden">
+      <div class="overlay-bg"></div>
+      <div class="dialog dialog-connection-report">
+        <div class="drawer-head">
+          <span data-i18n="connectionReportTitle">Результат проверки</span>
+          <button class="x-btn" id="connection-report-x">✕</button>
+        </div>
+        <div class="connection-report-summary" id="connection-report-summary"></div>
+        <div class="connection-report-detail" id="connection-report-detail"></div>
+        <div class="connection-report-metrics" id="connection-report-metrics"></div>
+        <div class="connection-report-section-title" data-i18n="connectionReportRecommendations">Предлагаемые изменения</div>
+        <div class="connection-report-recommendations" id="connection-report-recommendations"></div>
+        <div class="dialog-btns connection-report-actions">
+          <button class="btn-secondary" id="connection-report-close" data-i18n="cancel">Отмена</button>
+          <button class="btn-primary" id="connection-report-apply" data-i18n="connectionReportApply">Применить</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Unsaved Settings Dialog -->
+    <div id="overlay-settings-unsaved" class="overlay hidden">
+      <div class="overlay-bg"></div>
+      <div class="dialog dialog-confirm dialog-unsaved">
+        <div class="confirm-message" data-i18n="unsavedSettings">Сохранить изменения в настройках?</div>
+        <div class="dialog-btns settings-unsaved-actions">
+          <button class="btn-secondary" id="settings-unsaved-cancel" data-i18n="cancel">Отмена</button>
+          <button class="btn-secondary" id="settings-unsaved-discard" data-i18n="discardChanges">Не сохранять</button>
+          <button class="btn-primary" id="settings-unsaved-save" data-i18n="saveBtn">Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <div id="app-tooltip" class="app-tooltip" role="tooltip"></div>
+  <div class="glow-container" id="glow-container">
+    <div class="glow-border" id="glow-border"></div>
+  </div>
+  <script src="qrcode.min.js"></script>
+  <script type="module" src="index.js?v=1.0.0"></script>
+</body>
+</html>

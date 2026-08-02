@@ -1,0 +1,23 @@
+{
+  "name": "warpy-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "contract:generate": "node ../tools/generate-core-contract.mjs",
+    "contract:check": "node ../tools/generate-core-contract.mjs --check",
+    "pretest": "npm run contract:check",
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:updater": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "js-yaml": "4.3.0"
+  }
+}

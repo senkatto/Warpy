@@ -1,0 +1,202 @@
+package com.warpy.app
+
+import com.warpy.app.data.ProfileParser
+import com.warpy.app.model.Protocol
+import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.test.assertFalse
+
+class ProfileParserTest {
+
+    @Test
+    fun testParseVlessReality() {
+        val link = "vless://96b0101c-0eb9-4089-9a00-111122223333@1.2.3.4:443" +
+                "?security=reality&sni=yahoo.com&flow=xtls-rprx-vision" +
+                "&pbk=pubkey123&sid=shortid123&fp=chrome#My%20Reality%20Profile"
+
+        val result = ProfileParser.parse(link)
+        assertTrue(result.isSuccess)
+        val profile = result.getOrThrow()
+
+        assertEquals("My Reality Profile", profile.name)
+        assertEquals(Protocol.Vless, profile.protocol)
+        assertEquals("1.2.3.4", profile.server)
+        assertEquals(443, profile.port)
+        assertEquals("96b0101c-0eb9-4089-9a00-111122223333", profile.uuid)
+        assertEquals("reality", profile.security)
+        assertEquals("yahoo.com", profile.sni)
+        assertEquals("xtls-rprx-vision", profile.flow)
+        assertEquals("pubkey123", profile.publicKey)
+        assertEquals("shortid123", profile.shortId)
+        assertEquals("chrome", profile.fingerprint)
+    }
+
+    @Test
+    fun testParseHysteria2WithObfs() {
+        val link = "hysteria2://myPassword123@5.6.7.8:8443" +
+                "?insecure=1&sni=google.com&obfs=salamander&obfs-password=obfsPass" +
+                "&server_ports=20000-30000&hop_interval=5s&hop_interval_max=10s" +
+                "&up_mbps=150&down_mbps=200#Hysteria2%20Profile"
+
+        val result = ProfileParser.parse(link)
+        assertTrue(result.isSuccess)
+        val profile = result.getOrThrow()
+
+        assertEquals("Hysteria2 Profile", profile.name)
+        assertEquals(Protocol.Hysteria2, profile.protocol)
+        assertEquals("5.6.7.8", profile.server)
+        assertEquals(8443, profile.port)
+        assertEquals("myPassword123", profile.password)
+        assertEquals("google.com", profile.sni)
+        assertTrue(profile.allowInsecure)
+        assertEquals("salamander", profile.hysteria2ObfsType)
+        assertEquals("obfsPass", profile.hysteria2ObfsPassword)
+        assertEquals("20000-30000", profile.hysteria2ServerPorts)
+        assertEquals("5s", profile.hysteria2HopInterval)
+        assertEquals("10s", profile.hysteria2HopIntervalMax)
+        assertEquals(150, profile.hysteria2UpMbps)
+        assertEquals(200, profile.hysteria2DownMbps)
+    }
+
+    @Test
+    fun testParseHysteria2AcceptsBooleanInsecureParameter() {
+        val result = ProfileParser.parse(
+            "hysteria2://password@5.6.7.8:443?insecure=true#Profile",
+        )
+
+        assertTrue(result.isSuccess)
+        assertTrue(result.getOrThrow().allowInsecure)
+    }
+
+    @Test
+    fun testParseHysteria2ShareLinkWithRawPlusAndAllowInsecureAlias() {
+        val result = ProfileParser.parse(
+            "hysteria2://AbCd123+XyZ@203.0.113.10:2443" +
+                "?obfs-password=AbCd123%2BXyZ&security=tls" +
+                "&sni=www.cloudflare.com&allowInsecure=true#Fallback",
+        )
+
+        assertTrue(result.isSuccess)
+        val profile = result.getOrThrow()
+        assertEquals("AbCd123+XyZ", profile.password)
+        assertEquals("AbCd123+XyZ", profile.hysteria2ObfsPassword)
+        assertEquals("salamander", profile.hysteria2ObfsType)
+        assertTrue(profile.allowInsecure)
+    }
+
+    @Test
+    fun testParseTrojan() {
+        val link = "trojan://trojanPassword@9.10.11.12:443" +
+                "?sni=peer-host.com&insecure=1#Trojan%20Profile"
+
+        val result = ProfileParser.parse(link)
+        assertTrue(result.isSuccess)
+        val profile = result.getOrThrow()
+
+        assertEquals("Trojan Profile", profile.name)
+        assertEquals(Protocol.Trojan, profile.protocol)
+        assertEquals("9.10.11.12", profile.server)
+        assertEquals(443, profile.port)
+        assertEquals("trojanPassword", profile.password)
+        assertEquals("peer-host.com", profile.sni)
+        assertTrue(profile.allowInsecure)
+    }
+
+    @Test
+    fun testParseTrojanReality() {
+        val result = ProfileParser.parse(
+            "trojan://00000000-0000-4000-8000-000000000001@203.0.113.10:8444" +
+                "?security=reality&sni=example.com" +
+                "&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" +
+                "&sid=0123abcd&type=tcp&flow=#Trojan-Fixture",
+        )
+
+        assertTrue(result.isSuccess)
+        val profile = result.getOrThrow()
+        assertEquals(Protocol.Trojan, profile.protocol)
+        assertEquals("reality", profile.security)
+        assertEquals("example.com", profile.sni)
+        assertEquals("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", profile.publicKey)
+        assertEquals("0123abcd", profile.shortId)
+        assertEquals("tcp", profile.transport)
+        assertEquals("chrome", profile.fingerprint)
+    }
+
+    @Test
+    fun testParseVlessWebSocket() {
+        val link = "vless://96b0101c-0eb9-4089-9a00-111122223333@1.2.3.4:443" +
+                "?type=ws&host=wshost.com&path=/wspath#WS%20Profile"
+        val result = ProfileParser.parse(link)
+        assertTrue(result.isSuccess)
+        val profile = result.getOrThrow()
+        assertEquals("ws", profile.transport)
+        assertEquals("wshost.com", profile.host)
+        assertEquals("/wspath", profile.path)
+        assertFalse(profile.multiplex)
+    }
+
+    @Test
+    fun testParseVlessGrpcAndMultiplex() {
+        val link = "vless://96b0101c-0eb9-4089-9a00-111122223333@1.2.3.4:443" +
+                "?type=grpc&serviceName=myService&mux=1#Grpc%20Profile"
+        val result = ProfileParser.parse(link)
+        assertTrue(result.isSuccess)
+        val profile = result.getOrThrow()
+        assertEquals("grpc", profile.transport)
+        assertEquals("myService", profile.serviceName)
+        assertTrue(profile.multiplex)
+    }
+
+    @Test
+    fun testParseVlessXhttpStreamUp() {
+        val link = "vless://96b0101c-0eb9-4089-9a00-111122223333@1.2.3.4:443" +
+            "?type=xhttp&mode=stream-up&path=%2Fwarpy&host=cdn.example.com#XHTTP%20Profile"
+        val profile = ProfileParser.parse(link).getOrThrow()
+
+        assertEquals("xhttp", profile.transport)
+        assertEquals("stream-up", profile.xhttpMode)
+        assertEquals("/warpy", profile.path)
+        assertEquals("cdn.example.com", profile.host)
+    }
+
+    @Test
+    fun testParseVlessXhttpDefaultsToStreamOne() {
+        val link = "vless://96b0101c-0eb9-4089-9a00-111122223333@1.2.3.4:443?type=XHTTP"
+        val profile = ProfileParser.parse(link).getOrThrow()
+
+        assertEquals("xhttp", profile.transport)
+        assertEquals("stream-one", profile.xhttpMode)
+    }
+
+    @Test
+    fun testRejectTrojanXhttp() {
+        val link = "trojan://password@1.2.3.4:443?type=xhttp"
+
+        assertTrue(ProfileParser.parse(link).isFailure)
+    }
+
+    @Test
+    fun testParseUnsupportedTransport() {
+        val link = "vless://96b0101c-0eb9-4089-9a00-111122223333@1.2.3.4:443?type=quic"
+        val result = ProfileParser.parse(link)
+        assertTrue(result.isFailure)
+        val error = result.exceptionOrNull()
+        assertTrue(error is IllegalArgumentException)
+        assertTrue(error.message?.contains("Профиль содержит пока неподдерживаемый транспорт") == true)
+    }
+
+    @Test
+    fun testParseInvalidLinks() {
+        val emptyLink = ""
+        val invalidScheme = "ss://method:pass@host:port"
+        val missingServer = "vless://uuid@:443"
+        val missingUserInfo = "vless://@host:port"
+
+        assertTrue(ProfileParser.parse(emptyLink).isFailure)
+        assertTrue(ProfileParser.parse(invalidScheme).isFailure)
+        assertTrue(ProfileParser.parse(missingServer).isFailure)
+        assertTrue(ProfileParser.parse(missingUserInfo).isFailure)
+    }
+
+}

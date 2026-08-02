@@ -1,0 +1,74 @@
+name: Control Warpy desktop rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Activate a signed rollback or clear the channel marker"
+        required: true
+        default: activate
+        type: choice
+        options:
+          - activate
+          - clear
+      channel:
+        description: "Release channel"
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
+          - beta
+      target_tag:
+        description: "Published signed release tag; required for activate"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ROLLBACK_ACTION: ${{ inputs.action }}
+      ROLLBACK_CHANNEL: ${{ inputs.channel }}
+      TARGET_TAG: ${{ inputs.target_tag }}
+
+    steps:
+      - name: Validate target
+        if: inputs.action == 'activate'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_TAG" == v* ]] || { echo 'target_tag must start with v'; exit 1; }
+          release_json="$(gh release view "$TARGET_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease,assets)"
+          RELEASE_JSON="$release_json" node <<'NODE'
+          const release = JSON.parse(process.env.RELEASE_JSON);
+          if (release.isDraft) throw new Error('rollback target must already be published');
+          if (process.env.ROLLBACK_CHANNEL === 'stable' && release.isPrerelease) {
+            throw new Error('stable rollback cannot target a prerelease');
+          }
+          const feed = release.isPrerelease ? 'latest-beta.json' : 'latest.json';
+          if (!release.assets.some(asset => asset.name === feed)) throw new Error(`missing ${feed}`);
+          NODE
+
+      - name: Set one rollback marker for the channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          marker="[warpy-rollback:$ROLLBACK_CHANNEL]"
+          mapfile -t tags < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isDraft --jq '.[] | select(.isDraft == false) | .tagName')
+          for tag in "${tags[@]}"; do
+            body="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""')"
+            cleaned="$(printf '%s\n' "$body" | grep -Fvx "$marker" || true)"
+            if [[ "$cleaned" != "$body" ]]; then
+              gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes "$cleaned"
+            fi
+          done
+          if [[ "$ROLLBACK_ACTION" == "activate" ]]; then
+            [[ -n "$TARGET_TAG" ]] || { echo 'target_tag is required'; exit 1; }
+            body="$(gh release view "$TARGET_TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""')"
+            gh release edit "$TARGET_TAG" --repo "$GITHUB_REPOSITORY" --notes "${body}${body:+$'\n'}$marker"
+          fi

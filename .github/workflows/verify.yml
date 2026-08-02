@@ -1,0 +1,82 @@
+name: Verify Warpy
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests, lint, and release build
+        run: >-
+          ./gradlew --no-daemon
+          :app:checkMojibakeText
+          :app:testReleaseUnitTest
+          :app:lintRelease
+          :app:assembleRelease
+
+  desktop-verify:
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        working-directory: desktop-tauri
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop-tauri/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Check frontend and tests
+        shell: pwsh
+        run: |
+          node --check src\index.js
+          npm test
+          npm audit --omit=dev
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Lint Rust
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: Test Rust
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
+
+      - name: Verify bundled core provenance
+        shell: pwsh
+        run: .\scripts\verify-core-provenance.ps1

@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "protocols": ["vless", "trojan", "hysteria2"],
+  "transports": ["tcp", "raw", "ws", "grpc", "http", "httpupgrade", "xhttp"],
+  "tags": {
+    "proxy": "proxy",
+    "direct": "direct",
+    "block": "block",
+    "tun": "tun-in",
+    "remoteDns": "remote",
+    "localDns": "local-dns"
+  },
+  "dns": {
+    "remoteServer": "1.1.1.1",
+    "remotePort": 443,
+    "remotePath": "/dns-query",
+    "remoteTlsServerName": "cloudflare-dns.com",
+    "localServer": "1.1.1.1",
+    "localPort": 53,
+    "strategy": "ipv4_only"
+  },
+  "routing": {
+    "russianDomainSuffixes": [".ru", ".xn--p1ai", ".su", "ozonusercontent.com"],
+    "healthDomainSuffixes": ["speed.cloudflare.com"],
+    "blockQuicOnlyWhenEnabled": true
+  },
+  "platforms": {
+    "android": {
+      "interfaceName": "warpy0",
+      "addresses": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
+      "localDnsTag": "local",
+      "localDnsType": "local",
+      "stack": "gvisor",
+      "strictRoute": true,
+      "defaultMtu": 1400,
+      "xhttpDefaultMode": "stream-one"
+    },
+    "windows": {
+      "interfaceName": "warpy-tun",
+      "localDnsServer": "8.8.8.8",
+      "addresses": ["172.29.99.1/30"],
+      "stack": "mixed",
+      "strictRoute": true,
+      "defaultMtu": 1400,
+      "xhttpDefaultMode": "stream-one"
+    }
+  }
+}

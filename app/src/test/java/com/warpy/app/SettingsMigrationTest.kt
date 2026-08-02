@@ -1,0 +1,119 @@
+package com.warpy.app
+
+import com.warpy.app.data.migrateProfilesForSchema
+import com.warpy.app.data.groupProfiles
+import com.warpy.app.data.parseProfilesJson
+import com.warpy.app.data.ProfilesSnapshotSource
+import com.warpy.app.data.selectProfilesSnapshot
+import com.warpy.app.data.serializeProfilesJson
+import com.warpy.app.model.Protocol
+import com.warpy.app.model.VpnProfile
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class SettingsMigrationTest {
+    @Test
+    fun schema2KeepsCertificateVerificationEnabledByDefault() {
+        val profiles = listOf(
+            VpnProfile("hy2", Protocol.Hysteria2, "example.com", 443),
+            VpnProfile("vless", Protocol.Vless, "example.com", 443),
+        )
+
+        val migrated = migrateProfilesForSchema(profiles, storedSchemaVersion = 2)
+
+        assertFalse(migrated[0].allowInsecure)
+        assertFalse(migrated[1].allowInsecure)
+    }
+
+    @Test
+    fun currentSchemaPreservesExplicitCertificateVerification() {
+        val profile = VpnProfile("hy2", Protocol.Hysteria2, "example.com", 443)
+
+        val migrated = migrateProfilesForSchema(listOf(profile), storedSchemaVersion = 3)
+
+        assertFalse(migrated.single().allowInsecure)
+    }
+
+    @Test
+    fun repeatedCredentialsAreGroupedWithoutExternalFixtures() {
+        val sharedUuid = "00000000-0000-4000-8000-000000000001"
+        val profiles = listOf(
+            VpnProfile("Amsterdam", Protocol.Vless, "nl.example.com", 443, uuid = sharedUuid),
+            VpnProfile("Athens", Protocol.Vless, "gr.example.com", 443, uuid = sharedUuid),
+            VpnProfile("Vienna", Protocol.Vless, "at.example.com", 443, uuid = sharedUuid),
+            VpnProfile("Personal", Protocol.Hysteria2, "hy2.example.com", 443, password = "fixture"),
+        )
+
+        val grouped = groupProfiles(profiles)
+
+        assertTrue(grouped.take(3).all { it.group == "BlancVPN" })
+        assertTrue(grouped.last().group.isBlank())
+    }
+
+    @Test
+    fun validPrimarySnapshotWinsOverBackupEvenWhenItIsEmpty() {
+        val backup = serializeProfilesJson(
+            listOf(VpnProfile("old", Protocol.Vless, "old.example.com", 443)),
+        )
+
+        val selected = selectProfilesSnapshot(primaryJson = "[]", backupJson = backup)
+
+        assertEquals(ProfilesSnapshotSource.Primary, selected.source)
+        assertEquals(emptyList(), selected.profiles)
+    }
+
+    @Test
+    fun validBackupRecoversACorruptPrimarySnapshot() {
+        val backupProfiles = listOf(
+            VpnProfile("recovered", Protocol.Hysteria2, "vpn.example.com", 443),
+        )
+        val backup = serializeProfilesJson(backupProfiles)
+
+        val selected = selectProfilesSnapshot(primaryJson = "{broken", backupJson = backup)
+
+        assertEquals(ProfilesSnapshotSource.Backup, selected.source)
+        assertEquals(backupProfiles, selected.profiles)
+        assertEquals(backup, selected.rawJson)
+    }
+
+    @Test
+    fun invalidSnapshotsAreNotMistakenForAnEmptyProfileList() {
+        val selected = selectProfilesSnapshot(
+            primaryJson = "{broken",
+            backupJson = "[not-json]",
+        )
+
+        assertEquals(ProfilesSnapshotSource.Invalid, selected.source)
+        assertNull(selected.profiles)
+    }
+
+    @Test
+    fun profileJsonRoundTripPreservesConnectionFields() {
+        val original = listOf(
+            VpnProfile(
+                name = "xhttp",
+                protocol = Protocol.Vless,
+                server = "vpn.example.com",
+                port = 443,
+                uuid = "00000000-0000-4000-8000-000000000001",
+                sni = "cdn.example.com",
+                security = "reality",
+                publicKey = "public-key",
+                shortId = "abcd",
+                transport = "xhttp",
+                host = "cdn.example.com",
+                path = "/warpy",
+                xhttpMode = "auto",
+                multiplex = true,
+                group = "Personal",
+            ),
+        )
+
+        val restored = parseProfilesJson(serializeProfilesJson(original)).getOrThrow()
+
+        assertEquals(original, restored)
+    }
+}

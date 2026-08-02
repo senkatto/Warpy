@@ -1,0 +1,81 @@
+name: Warpy signed APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/android-always-connected
+    paths:
+      - ".github/workflows/signed-apk.yml"
+      - "app/**"
+      - "build.gradle.kts"
+      - "settings.gradle.kts"
+      - "gradle/**"
+      - "gradle.properties"
+      - "gradlew"
+      - "gradlew.bat"
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode production keystore
+        shell: bash
+        run: |
+          test -n "${{ secrets.WARPY_KEYSTORE_BASE64 }}"
+          printf '%s' "${{ secrets.WARPY_KEYSTORE_BASE64 }}" \
+            | base64 --decode > "$RUNNER_TEMP/warpy-release.jks"
+          test -s "$RUNNER_TEMP/warpy-release.jks"
+
+      - name: Verify source and tests
+        env:
+          RELEASE_STORE_FILE: ${{ runner.temp }}/warpy-release.jks
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: >-
+          ./gradlew --no-daemon
+          :app:checkMojibakeText
+          :app:testProductionUnitTest
+          :app:lintProduction
+
+      - name: Build signed production APK
+        env:
+          RELEASE_STORE_FILE: ${{ runner.temp }}/warpy-release.jks
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon --stacktrace :app:assembleProduction
+
+      - name: Verify APK signature
+        shell: bash
+        run: |
+          apk="app/build/outputs/apk/production/app-production.apk"
+          test -f "$apk"
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$apksigner"
+          "$apksigner" verify --verbose --print-certs "$apk"
+
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Warpy-signed-APK
+          path: app/build/outputs/apk/production/app-production.apk
+          if-no-files-found: error
+          retention-days: 3

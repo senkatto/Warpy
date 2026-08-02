@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Warpy",
+  "version": "1.0.0",
+  "identifier": "com.warpy.desktop",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Warpy",
+        "width": 420,
+        "height": 720,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src https://speed.cloudflare.com; img-src 'self' data:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'",
+      "capabilities": [
+        "default"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "bin/sing-box"
+    ],
+    "resources": [
+      "bin/wintun.dll",
+      "flags/*.png"
+    ],
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "sidebarImage": "icons/installer_sidebar.bmp",
+        "headerImage": "icons/installer_header.bmp",
+        "installMode": "perMachine",
+        "template": "installer.nsi",
+        "installerHooks": "windows-installer-hooks.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQxNEQ5NkI2MTI5MjQ1QTIKUldTaVJaSVN0cFpOMGZtOVA3KzNqdmZRaTloUWlpbUd4VWVCMGRxT0w3VGtyNExab1I1UEthNGUK",
+      "endpoints": [
+        "https://github.com/senkatto/Warpy/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "quiet"
+      }
+    }
+  }
+}

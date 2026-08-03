@@ -41,7 +41,11 @@ internal class DefaultNetworkMonitor(
         override fun onAvailable(network: Network) {
             Log.i(TAG, "Physical network available: $network")
             if (tracksBestNetworkOnly) candidates.clear()
-            candidates.getOrPut(network, ::Candidate)
+            candidates.getOrPut(network, ::Candidate).apply {
+                capabilities = connectivity.getNetworkCapabilities(network)
+                linkProperties = connectivity.getLinkProperties(network)
+            }
+            publishBestNetwork()
         }
 
         override fun onCapabilitiesChanged(
@@ -79,9 +83,8 @@ internal class DefaultNetworkMonitor(
                 val capabilities = candidate.capabilities ?: return@mapNotNull null
                 val isSuspended = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
                     !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
-                if (!isUsablePhysicalNetwork(
+                if (!isHandoverCandidatePhysicalNetwork(
                         hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
-                        isValidated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
                         isSuspended = isSuspended,
                         isVpn = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
                         isBlocked = candidate.blocked,
@@ -108,7 +111,7 @@ internal class DefaultNetworkMonitor(
         if (previousKey == nextKey) return
 
         if (nextState == null) {
-            Log.i(TAG, "No validated physical network is available")
+            Log.i(TAG, "No physical internet network is available")
         } else {
             Log.i(
                 TAG,
@@ -167,6 +170,7 @@ private data class MonitorStateKey(
     val interfaceName: String?,
     val dnsServers: List<String>,
     val isMetered: Boolean,
+    val isValidated: Boolean,
 )
 
 private fun PhysicalNetworkState.monitorKey(): MonitorStateKey = MonitorStateKey(
@@ -174,4 +178,5 @@ private fun PhysicalNetworkState.monitorKey(): MonitorStateKey = MonitorStateKey
     interfaceName = linkProperties?.interfaceName,
     dnsServers = linkProperties?.dnsServers.orEmpty().mapNotNull(InetAddress::getHostAddress),
     isMetered = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED),
+    isValidated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
 )

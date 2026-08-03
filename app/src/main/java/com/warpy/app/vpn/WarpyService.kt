@@ -1855,9 +1855,8 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
                 val caps = connectivity.getNetworkCapabilities(network) ?: return@mapNotNull null
                 val suspended = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
                     !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
-                if (!isUsablePhysicalNetwork(
+                if (!isHandoverCandidatePhysicalNetwork(
                         hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
-                        isValidated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
                         isSuspended = suspended,
                         isVpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
                         isBlocked = false,
@@ -1869,7 +1868,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             }
             .maxByOrNull { (network, caps) ->
                 physicalNetworkPriority(
-                    isValidated = true,
+                    isValidated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
                     hasEthernet = caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
                     hasWifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
                     hasCellular = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),

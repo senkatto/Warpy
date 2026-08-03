@@ -91,6 +91,15 @@ class ConnectionRecoveryPolicyTest {
     }
 
     @Test
+    fun `validated network wins while an unvalidated handover remains usable`() {
+        val validatedCellular = physicalNetworkPriority(true, false, false, true, true, false)
+        val pendingWifi = physicalNetworkPriority(false, false, true, false, false, true)
+
+        assertTrue(isHandoverCandidatePhysicalNetwork(true, false, false, false))
+        assertTrue(validatedCellular > pendingWifi)
+    }
+
+    @Test
     fun `recovery retries use bounded exponential backoff`() {
         val delays = (0 until MAX_RECOVERY_ATTEMPTS).map {
             recoveryDelayMillis(it, jitterUnit = 0.5)

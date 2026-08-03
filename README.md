@@ -37,6 +37,14 @@ Warpy - локальный VPN-клиент для Android и Windows. Он им
 
 ## Возможности
 
+### Девять протоколов без ручного выбора
+
+`VLESS` · `Hysteria2` · `Hysteria` · `Trojan` · `VMess` · `Shadowsocks` · `SOCKS` · `WireGuard` · `TUIC`
+
+Warpy распознаёт протокол по содержимому ссылки. На Android профиль можно добавить из буфера обмена,
+QR-кода или изображения с QR-кодом; на Windows - из буфера обмена. Ссылки подписок распознаются той же
+кнопкой, поэтому перед импортом не нужно выбирать тип профиля.
+
 | | Android | Windows |
 | --- | --- | --- |
 | **Протоколы** | VLESS, Hysteria2, Hysteria, Trojan, VMess, Shadowsocks, SOCKS, WireGuard, TUIC | VLESS, Hysteria2, Hysteria, Trojan, VMess, Shadowsocks, SOCKS, WireGuard, TUIC |

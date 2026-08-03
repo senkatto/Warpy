@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="304" viewBox="0 0 1200 304" role="img" aria-labelledby="title desc">
   <title id="title">Warpy для Android и Windows</title>
-  <desc id="desc">Локальный VPN-клиент для профилей VLESS, Hysteria2 и Trojan.</desc>
+  <desc id="desc">Локальный VPN-клиент для девяти протоколов с автоматическим распознаванием профилей.</desc>
   <rect x="1" y="1" width="1198" height="302" rx="24" fill="#080a0a" stroke="#202725" stroke-width="2"/>
 
   <g font-family="Segoe UI, Arial, sans-serif">
@@ -20,13 +20,10 @@
 
     <text x="600" y="226" text-anchor="middle" fill="#929b98" font-size="19">Локально, без аккаунта и облака профилей</text>
 
-    <g transform="translate(427 248)" font-size="14" font-weight="700">
-      <rect width="92" height="32" rx="16" fill="#131716" stroke="#303735"/>
-      <text x="46" y="21" text-anchor="middle" fill="#cbd1cf">VLESS</text>
-      <rect x="104" width="126" height="32" rx="16" fill="#131716" stroke="#303735"/>
-      <text x="167" y="21" text-anchor="middle" fill="#cbd1cf">HYSTERIA2</text>
-      <rect x="242" width="104" height="32" rx="16" fill="#131716" stroke="#303735"/>
-      <text x="294" y="21" text-anchor="middle" fill="#cbd1cf">TROJAN</text>
+    <g transform="translate(441 248)" font-size="14" font-weight="700">
+      <rect width="318" height="32" rx="16" fill="#131716" stroke="#303735"/>
+      <circle cx="22" cy="16" r="4" fill="#19d4a3"/>
+      <text x="170" y="21" text-anchor="middle" fill="#cbd1cf">9 ПРОТОКОЛОВ · АВТООПРЕДЕЛЕНИЕ</text>
     </g>
   </g>
 </svg>

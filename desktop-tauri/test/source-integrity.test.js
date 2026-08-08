@@ -7,11 +7,9 @@ import { fileURLToPath } from 'node:url';
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sourceFiles = [
   'src/clipboard-import.js',
-  'src/connection-diagnostics.js',
   'src/index.css',
   'src/index.html',
   'src/index.js',
-  'src/network-policy.js',
   'src/network-measurements.js',
   'src/subscription.js',
   'src/tray-profiles.js',
@@ -458,8 +456,15 @@ test('deleting an inactive profile preserves the active tunnel', async () => {
   const deletion = source.slice(start, end);
   assert.match(deletion, /restartRuntime: deletingActive/);
   assert.match(deletion, /if \(!deletingActive && deletedRuntimeIndex >= 0\)/);
-  assert.match(deletion, /invoke\('forget_vpn_outbound'/);
+  assert.match(deletion, /forgetRuntimeOutbounds/);
   assert.doesNotMatch(deletion, /if \(wasRunning\) await stopVpn\(\)/);
+
+  const cleanupStart = source.indexOf('async function forgetRuntimeOutbounds');
+  const cleanupEnd = source.indexOf('async function applySubscriptionUpdate', cleanupStart);
+  const cleanup = source.slice(cleanupStart, cleanupEnd);
+  assert.match(cleanup, /invoke\('forget_vpn_outbound'/);
+  assert.match(cleanup, /if \(!await stopVpn\(\)\)/);
+  assert.match(cleanup, /await startVpn\(\{ preserveActiveProfile: true \}\)/);
 });
 
 test('profile import asks before switching an active tunnel and auto-connects while offline', async () => {
@@ -475,20 +480,19 @@ test('profile import asks before switching an active tunnel and auto-connects wh
   assert.match(profileImport, /await startVpn\(\{ preserveActiveProfile: true \}\)/);
 });
 
-test('automatic switches never overwrite the last manual profile choice', async () => {
+test('manual profile choice is persisted without hidden automatic switching', async () => {
   const source = await readFile(path.join(projectRoot, 'src/index.js'), 'utf8');
-  const refreshStart = source.indexOf('async function refreshVpnHealth()');
-  const refreshEnd = source.indexOf('async function updateResumeOnBootPolicy()', refreshStart);
   const selectStart = source.indexOf('async function selectProfile(');
   const selectEnd = source.indexOf('function createProfileItemEl(', selectStart);
 
-  assert.notEqual(refreshStart, -1);
-  assert.notEqual(refreshEnd, -1);
   assert.notEqual(selectStart, -1);
   assert.notEqual(selectEnd, -1);
-  assert.doesNotMatch(source.slice(refreshStart, refreshEnd), /await save\(\)/);
-  assert.match(source.slice(selectStart, selectEnd), /setPreferredProfile\(index\)/);
+  const selection = source.slice(selectStart, selectEnd);
+  assert.match(selection, /setPreferredProfile\(index\)/);
+  assert.match(selection, /if \(stoppedForRestart && !await startVpn\(\)\) return false/);
+  assert.match(source, /async function startVpn[\s\S]*?return true;[\s\S]*?return false;/);
   assert.match(source, /preferredProfileKey: S\.preferredProfileKey/);
+  assert.doesNotMatch(source, /set_warpy_auto|refreshVpnHealth|autoSwitchNotificationEvent/);
 });
 
 test('subscription updates are persisted with the current settings schema', async () => {
@@ -498,7 +502,7 @@ test('subscription updates are persisted with the current settings schema', asyn
   const yamlLicense = await readFile(path.join(projectRoot, 'src/vendor/js-yaml.LICENSE.txt'), 'utf8');
   const packageJson = JSON.parse(await readFile(path.join(projectRoot, 'package.json'), 'utf8'));
 
-  assert.match(source, /schemaVersion: 7/);
+  assert.match(source, /schemaVersion: 8/);
   assert.match(source, /subscriptions: S\.subscriptions\.map/);
   assert.match(source, /lastCheckedAt: subscription\.lastCheckedAt/);
   assert.match(source, /lastStatus: subscription\.lastStatus/);
@@ -519,8 +523,8 @@ test('subscription updates are persisted with the current settings schema', asyn
   assert.match(subscriptionSource, /maxDepth: 20/);
   assert.match(subscriptionSource, /maxTotalMergeKeys: 0/);
   assert.match(subscriptionSource, /propertyValue\(config, \['proxies'\]\)/);
-  assert.equal(packageJson.dependencies['js-yaml'], '4.3.0');
-  assert.match(yamlSource, /Vendored from js-yaml 4\.3\.0/);
+  assert.equal(packageJson.dependencies['js-yaml'], '4.3.1');
+  assert.match(yamlSource, /Vendored from js-yaml 4\.3\.1/);
   assert.match(yamlLicense, /The MIT License/);
 });
 
@@ -556,12 +560,13 @@ test('desktop updates are signed, user-confirmed and constrained to release chan
   assert.match(main, /updates::install_update/);
   assert.equal(updaterConfig.bundle.createUpdaterArtifacts, true);
   assert.match(config.plugins.updater.pubkey, /^[A-Za-z0-9+/=]+$/);
-  assert.match(updates, /UpdateChannel::parse/);
+  assert.match(updates, /release\.draft \|\| release\.prerelease/);
+  assert.match(updates, /MAX_RELEASE_FEED_BYTES/);
   assert.match(updates, /RELEASE_DOWNLOAD_PREFIX/);
   assert.match(updates, /is_trusted_feed_url/);
   assert.match(updates, /release\.version == expected/);
   assert.match(updates, /download_and_install/);
-  assert.doesNotMatch(updates, /channel.*Url::parse|endpoint:\s*String/);
+  assert.doesNotMatch(updates, /UpdateChannel|latest-beta\.json|endpoint:\s*String/);
   assert.match(frontend, /await showConfirm\([\s\S]*updateRestartNotice/);
   assert.match(frontend, /invoke\('install_update'/);
   assert.doesNotMatch(frontend.slice(0, frontend.indexOf('function bindEvents()')), /check_for_update/);
@@ -600,22 +605,16 @@ test('failed first launch restores the previous signed installation locally', as
   assert.doesNotMatch(hooks, /https?:\/\//);
 });
 
-test('public-network auto protection stays disabled after the setting is removed', async () => {
+test('removed automatic network policies are migrated out and cannot change connectivity', async () => {
   const frontend = await readFile(path.join(projectRoot, 'src/index.js'), 'utf8');
   const html = await readFile(path.join(projectRoot, 'src/index.html'), 'utf8');
-  const policy = await readFile(path.join(projectRoot, 'src/network-policy.js'), 'utf8');
   const service = await readFile(path.join(projectRoot, 'src-tauri/src/vpn_service.rs'), 'utf8');
   const context = await readFile(path.join(projectRoot, 'src-tauri/src/network_context.rs'), 'utf8');
 
   assert.doesNotMatch(html, /s-network-auto-protect|network-auto-protect-status/);
   assert.doesNotMatch(frontend, /s-network-auto-protect/);
-  assert.match(frontend, /networkAutoProtect: false/);
-  assert.match(frontend, /S\.networkAutoProtect = false/);
-  assert.match(frontend, /if \(d\.networkAutoProtect === true\) migrated = true/);
-  assert.match(frontend, /await stopVpn\(\{ manual: true \}\)/);
-  assert.match(frontend, /S\.networkAutoBlocked = true/);
-  assert.match(policy, /backendStatus !== 'Stopped'/);
-  assert.doesNotMatch(policy, /disconnect|stopVpn|stop_vpn/);
+  assert.match(frontend, /'networkAutoProtect' in d/);
+  assert.doesNotMatch(frontend, /applyNetworkAutoProtection|networkProtectionDecision|set_warpy_auto/);
   assert.match(service, /NetworkChangeSubscription::register/);
   assert.match(service, /refresh_network_context/);
   assert.doesNotMatch(context, /ssid|network.*name|GetName|GetNetworkId|wmi/i);

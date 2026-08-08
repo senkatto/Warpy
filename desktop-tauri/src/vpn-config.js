@@ -6,6 +6,14 @@ const TAGS = CORE_CONTRACT.tags;
 const DNS = CORE_CONTRACT.dns;
 const ROUTING = CORE_CONTRACT.routing;
 const WINDOWS = CORE_CONTRACT.platforms.windows;
+const TRANSPORT_ALIASES = new Map([
+  ['h2', 'http'],
+  ['http-upgrade', 'httpupgrade'],
+  ['http_upgrade', 'httpupgrade'],
+  ['splithttp', 'xhttp'],
+  ['split-http', 'xhttp'],
+  ['split_http', 'xhttp'],
+]);
 
 const AD_DOMAINS = [
   '2mdn.net',
@@ -64,13 +72,18 @@ const QUIC_BROWSER_PROCESSES = [
 ];
 const RUSSIAN_DOMAIN_SUFFIXES = ROUTING.russianDomainSuffixes;
 const PROXY_DIAL = Object.freeze({
-  connectTimeout: '2s',
+  connectTimeout: '10s',
   tcpKeepAlive: '30s',
   tcpKeepAliveInterval: '15s',
 });
 
 function decode(value) {
   return decodeURIComponent(value || '');
+}
+
+function normalizeTransport(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return TRANSPORT_ALIASES.get(normalized) || normalized;
 }
 
 function decodeBase64Utf8(value) {
@@ -82,6 +95,31 @@ function decodeBase64Utf8(value) {
   } catch {
     return null;
   }
+}
+
+function encodeBase64Utf8(value, { urlSafe = false } = {}) {
+  const bytes = new TextEncoder().encode(String(value));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const encoded = btoa(binary);
+  return urlSafe ? encoded.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '') : encoded;
+}
+
+function encodeQuery(entries) {
+  const query = entries
+    .filter(([, value]) => value !== undefined && value !== null && String(value) !== '')
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+    .join('&');
+  return query ? `?${query}` : '';
+}
+
+function profileEndpoint(profile) {
+  const host = String(profile.host || '');
+  return `${host.includes(':') && !host.startsWith('[') ? `[${host}]` : host}:${profile.port}`;
+}
+
+function profileFragment(profile) {
+  return `#${encodeURIComponent(String(profile.name || profile.sni || profile.host || profile.protocol))}`;
 }
 
 function profileName(url, fallback) {
@@ -96,9 +134,10 @@ function parseVmessLink(source) {
     const host = String(value.add || '').trim();
     const port = Number.parseInt(value.port, 10);
     const uuid = String(value.id || '').trim();
-    const transport = String(value.net || 'tcp').toLowerCase();
+    const transport = normalizeTransport(value.net || 'tcp');
     if (!host || !uuid || !Number.isInteger(port) || port < 1 || port > 65535) return null;
-    if (!SUPPORTED_TRANSPORTS.has(transport) || transport === 'xhttp') return null;
+    if (!SUPPORTED_TRANSPORTS.has(transport)) return null;
+    const requestedXhttpMode = String(value.mode || '').toLowerCase();
     return {
       protocol: 'vmess',
       name: String(value.ps || '').trim() || host,
@@ -108,10 +147,14 @@ function parseVmessLink(source) {
       security: String(value.tls || '').toLowerCase(),
       sni: String(value.sni || ''),
       fp: String(value.fp || 'chrome'),
+      alpn: String(value.alpn || '').split(',').map(item => item.trim()).filter(Boolean),
       transport,
       path: String(value.path || ''),
       hostHeader: String(value.host || ''),
       serviceName: transport === 'grpc' ? String(value.path || '') : '',
+      xhttpMode: transport === 'xhttp' && ['stream-up', 'stream-one', 'packet-up'].includes(requestedXhttpMode)
+        ? requestedXhttpMode
+        : (transport === 'xhttp' ? WINDOWS.xhttpDefaultMode : ''),
       encryption: String(value.scy || 'auto'),
       alterId: Number.parseInt(value.aid, 10) || 0,
       packetEncoding: String(value.packetEncoding || ''),
@@ -143,8 +186,13 @@ function parseShadowsocksLink(source) {
   if (separator < 1) return null;
   try {
     const url = new URL(`ss://${encodeURIComponent(credential.slice(0, separator))}:${encodeURIComponent(credential.slice(separator + 1))}@${decoded.slice(at + 1)}`);
-    const port = parsePort(url);
+    const port = parsePort(url, null);
     if (!url.hostname || !port) return null;
+    const pluginSpec = url.searchParams.get('plugin') || '';
+    const separatorIndex = pluginSpec.indexOf(';');
+    const plugin = (separatorIndex < 0 ? pluginSpec : pluginSpec.slice(0, separatorIndex)).trim();
+    const pluginOptions = separatorIndex < 0 ? '' : pluginSpec.slice(separatorIndex + 1);
+    if (plugin && !['obfs-local', 'v2ray-plugin'].includes(plugin)) return null;
     return {
       protocol: 'shadowsocks',
       name: name || url.hostname,
@@ -152,6 +200,8 @@ function parseShadowsocksLink(source) {
       port,
       encryption: credential.slice(0, separator),
       password: credential.slice(separator + 1),
+      plugin,
+      pluginOptions,
       raw: source,
     };
   } catch {
@@ -159,8 +209,8 @@ function parseShadowsocksLink(source) {
   }
 }
 
-function parsePort(url) {
-  const port = url.port ? Number.parseInt(url.port, 10) : 443;
+function parsePort(url, defaultPort = 443) {
+  const port = url.port ? Number.parseInt(url.port, 10) : defaultPort;
   return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
 }
 
@@ -178,9 +228,10 @@ export function parseProfileLink(rawLink) {
       .replace(/^wg:\/\//i, 'wireguard://');
     const url = new URL(link);
     const protocol = url.protocol.slice(0, -1).toLowerCase();
-    const port = parsePort(url);
+    const port = parsePort(url, protocol === 'socks' ? 1080 : (protocol === 'wireguard' ? 51820 : 443));
     const credential = decode(url.username);
     const password = decode(url.password);
+    const opaqueCredential = password ? `${credential}:${password}` : credential;
     const host = url.hostname.startsWith('[') && url.hostname.endsWith(']')
       ? url.hostname.slice(1, -1)
       : url.hostname;
@@ -190,14 +241,14 @@ export function parseProfileLink(rawLink) {
     const obfsPassword = url.searchParams.get('obfs-password')
       || url.searchParams.get('obfs_password')
       || '';
-    const transport = (url.searchParams.get('type') || 'tcp').toLowerCase();
+    const transport = normalizeTransport(url.searchParams.get('type') || 'tcp');
     const requestedXhttpMode = (url.searchParams.get('mode') || '').toLowerCase();
     const profile = {
       protocol,
       name: profileName(url, host || protocol),
       host,
       port,
-      uuid: credential,
+      uuid: ['trojan', 'hysteria2', 'hysteria'].includes(protocol) ? opaqueCredential : credential,
       security: (url.searchParams.get('security') || '').toLowerCase(),
       sni: url.searchParams.get('sni') || url.searchParams.get('peer') || '',
       pbk: url.searchParams.get('pbk') || '',
@@ -223,6 +274,15 @@ export function parseProfileLink(rawLink) {
         || url.searchParams.get('obfs-type')
         || (obfsPassword ? 'salamander' : ''),
       obfsPassword,
+      serverPorts: url.searchParams.get('server_ports')
+        || url.searchParams.get('server-ports')
+        || url.searchParams.get('mport')
+        || url.searchParams.get('ports')
+        || '',
+      hopInterval: url.searchParams.get('hop_interval') || url.searchParams.get('hop-interval') || '',
+      hopIntervalMax: url.searchParams.get('hop_interval_max') || url.searchParams.get('hop-interval-max') || '',
+      upMbps: Number.parseInt(url.searchParams.get('up_mbps') || url.searchParams.get('upmbps'), 10) || 0,
+      downMbps: Number.parseInt(url.searchParams.get('down_mbps') || url.searchParams.get('downmbps'), 10) || 0,
       username: protocol === 'socks' ? credential : '',
       password: protocol === 'tuic' || protocol === 'socks' ? password : '',
       encryption: '',
@@ -246,11 +306,127 @@ export function parseProfileLink(rawLink) {
     }
     if (protocol === 'wireguard' && (!profile.privateKey || !profile.peerPublicKey || !profile.localAddress)) return null;
     if (!['hysteria2', 'hysteria', 'tuic', 'wireguard', 'socks'].includes(protocol) && !SUPPORTED_TRANSPORTS.has(transport)) return null;
-    if (transport === 'xhttp' && protocol !== 'vless') return null;
     return profile;
   } catch {
     return null;
   }
+}
+
+export function profileShareLink(inputProfile) {
+  const original = String(inputProfile?.raw || '').trim();
+  if (original) return original;
+
+  const profile = normalizeProfile(inputProfile);
+  const endpoint = profileEndpoint(profile);
+  const fragment = profileFragment(profile);
+  const insecure = profile.insecure ? '1' : '';
+  const alpn = Array.isArray(profile.alpn) ? profile.alpn.join(',') : String(profile.alpn || '');
+  const commonTransport = [
+    ['security', profile.security],
+    ['sni', profile.sni],
+    ['pbk', profile.pbk],
+    ['sid', profile.sid],
+    ['fp', profile.fp],
+    ['alpn', alpn],
+    ['type', profile.transport],
+    ['host', profile.hostHeader],
+    ['path', profile.path],
+    ['serviceName', profile.serviceName],
+    ['mode', profile.xhttpMode],
+    ['packetEncoding', profile.packetEncoding],
+  ];
+
+  if (profile.protocol === 'vmess') {
+    const payload = {
+      v: '2',
+      ps: profile.name || profile.host,
+      add: profile.host,
+      port: String(profile.port),
+      id: profile.uuid,
+      aid: String(profile.alterId || 0),
+      scy: profile.encryption || 'auto',
+      net: profile.transport || 'tcp',
+      host: profile.hostHeader || '',
+      path: profile.transport === 'grpc' ? (profile.serviceName || '') : (profile.path || ''),
+      tls: profile.security || '',
+      sni: profile.sni || '',
+      fp: profile.fp || '',
+      alpn,
+      mode: profile.xhttpMode || '',
+      packetEncoding: profile.packetEncoding || '',
+    };
+    return `vmess://${encodeBase64Utf8(JSON.stringify(payload))}`;
+  }
+
+  if (profile.protocol === 'shadowsocks') {
+    const credentials = encodeBase64Utf8(`${profile.encryption}:${profile.password}`, { urlSafe: true });
+    const plugin = profile.plugin
+      ? [['plugin', [profile.plugin, profile.pluginOptions].filter(Boolean).join(';')]]
+      : [];
+    return `ss://${credentials}@${endpoint}${encodeQuery(plugin)}${fragment}`;
+  }
+
+  if (profile.protocol === 'socks') {
+    const credentials = profile.username || profile.password
+      ? `${encodeURIComponent(profile.username || '')}:${encodeURIComponent(profile.password || '')}@`
+      : '';
+    return `socks5://${credentials}${endpoint}${fragment}`;
+  }
+
+  if (profile.protocol === 'wireguard') {
+    return `wireguard://${endpoint}${encodeQuery([
+      ['pk', profile.privateKey],
+      ['peer_pk', profile.peerPublicKey],
+      ['pre_shared_key', profile.preSharedKey],
+      ['local_address', profile.localAddress],
+      ['reserved', profile.reserved],
+      ['mtu', profile.mtu > 0 ? profile.mtu : ''],
+    ])}${fragment}`;
+  }
+
+  if (profile.protocol === 'hysteria2') {
+    return `hysteria2://${encodeURIComponent(profile.uuid)}@${endpoint}${encodeQuery([
+      ['sni', profile.sni],
+      ['alpn', alpn],
+      ['insecure', insecure],
+      ['obfs', profile.obfsType],
+      ['obfs-password', profile.obfsPassword],
+      ['server_ports', profile.serverPorts],
+      ['hop_interval', profile.hopInterval],
+      ['hop_interval_max', profile.hopIntervalMax],
+      ['up_mbps', profile.upMbps > 0 ? profile.upMbps : ''],
+      ['down_mbps', profile.downMbps > 0 ? profile.downMbps : ''],
+    ])}${fragment}`;
+  }
+
+  if (profile.protocol === 'tuic') {
+    const credentials = `${encodeURIComponent(profile.uuid)}:${encodeURIComponent(profile.password || '')}`;
+    return `tuic://${credentials}@${endpoint}${encodeQuery([
+      ['sni', profile.sni],
+      ['alpn', alpn],
+      ['insecure', insecure],
+      ['congestion_control', profile.congestionControl],
+      ['udp_relay_mode', profile.udpRelayMode],
+    ])}${fragment}`;
+  }
+
+  if (profile.protocol === 'hysteria') {
+    return `hysteria://${endpoint}${encodeQuery([
+      ['auth', profile.uuid],
+      ['sni', profile.sni],
+      ['alpn', alpn],
+      ['insecure', insecure],
+      ['obfs', profile.obfsPassword],
+      ['upmbps', profile.upMbps > 0 ? profile.upMbps : ''],
+      ['downmbps', profile.downMbps > 0 ? profile.downMbps : ''],
+    ])}${fragment}`;
+  }
+
+  const credential = encodeURIComponent(profile.uuid);
+  const query = profile.protocol === 'vless'
+    ? [...commonTransport, ['flow', profile.flow]]
+    : [...commonTransport, ['insecure', insecure]];
+  return `${profile.protocol}://${credential}@${endpoint}${encodeQuery(query)}${fragment}`;
 }
 
 function isIpAddress(host) {
@@ -274,9 +450,7 @@ function buildTransport(profile) {
     const requestedMode = profile.xhttpMode || WINDOWS.xhttpDefaultMode;
     const transport = {
       type: 'xhttp',
-      // stream-up intermittently stalls multiplexed browser traffic with the
-      // current sing-box/Xray pairing. stream-one is also what Android uses.
-      mode: requestedMode === 'stream-up' ? 'stream-one' : requestedMode,
+      mode: requestedMode,
       path: profile.path || '/',
     };
     if (profile.hostHeader) transport.host = profile.hostHeader;
@@ -355,6 +529,17 @@ function buildProxyOutbound(profile, tag = TAGS.proxy) {
     if (profile.obfsType && profile.obfsPassword) {
       outbound.obfs = { type: profile.obfsType, password: profile.obfsPassword };
     }
+    const serverPorts = String(profile.serverPorts || '')
+      .split(/[;,]/)
+      .map(value => value.trim())
+      .filter(Boolean);
+    if (serverPorts.length) {
+      outbound.server_ports = serverPorts;
+      outbound.hop_interval = profile.hopInterval || '10s';
+      if (profile.hopIntervalMax) outbound.hop_interval_max = profile.hopIntervalMax;
+    }
+    if (profile.upMbps > 0) outbound.up_mbps = profile.upMbps;
+    if (profile.downMbps > 0) outbound.down_mbps = profile.downMbps;
   } else if (profile.protocol === 'vmess') {
     outbound.uuid = profile.uuid;
     outbound.security = profile.encryption || 'auto';
@@ -367,6 +552,8 @@ function buildProxyOutbound(profile, tag = TAGS.proxy) {
   } else if (profile.protocol === 'shadowsocks') {
     outbound.method = profile.encryption;
     outbound.password = profile.password;
+    if (profile.plugin) outbound.plugin = profile.plugin;
+    if (profile.pluginOptions) outbound.plugin_opts = profile.pluginOptions;
   } else if (profile.protocol === 'socks') {
     outbound.version = '5';
     if (profile.username) outbound.username = profile.username;

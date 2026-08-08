@@ -172,6 +172,36 @@ class SingBoxConfigBuilderTest {
     }
 
     @Test
+    fun `vless preserves explicit alpn and packet encoding`() {
+        val vless = profile.copy(
+            protocol = Protocol.Vless,
+            uuid = "96b0101c-0eb9-4089-9a00-111122223333",
+            security = "tls",
+            alpn = listOf("h2", "http/1.1"),
+            packetEncoding = "packetaddr",
+        )
+        val outbound = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(vless))))
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+
+        assertEquals("packetaddr", outbound.getString("packet_encoding"))
+        assertEquals("h2", outbound.getJSONObject("tls").getJSONArray("alpn").getString(0))
+        assertEquals("http/1.1", outbound.getJSONObject("tls").getJSONArray("alpn").getString(1))
+    }
+
+    @Test
+    fun `hysteria2 preserves explicit alpn instead of forcing h3`() {
+        val explicitAlpn = profile.copy(alpn = listOf("h3", "hy2"))
+        val tls = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(explicitAlpn))))
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+            .getJSONObject("tls")
+
+        assertEquals("h3", tls.getJSONArray("alpn").getString(0))
+        assertEquals("hy2", tls.getJSONArray("alpn").getString(1))
+    }
+
+    @Test
     fun `route lets sing-box detect the physical interface`() {
         val root = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(profile))))
 
@@ -248,7 +278,7 @@ class SingBoxConfigBuilderTest {
     }
 
     @Test
-    fun `vless xhttp normalizes existing stream up profile for bidirectional traffic`() {
+    fun `vless xhttp preserves explicitly selected stream up mode`() {
         val xhttp = profile.copy(
             protocol = Protocol.Vless,
             uuid = "96b0101c-0eb9-4089-9a00-111122223333",
@@ -264,9 +294,66 @@ class SingBoxConfigBuilderTest {
             .getJSONObject("transport")
 
         assertEquals("xhttp", transport.getString("type"))
-        assertEquals("stream-one", transport.getString("mode"))
+        assertEquals("stream-up", transport.getString("mode"))
         assertEquals("/warpy", transport.getString("path"))
         assertEquals("cdn.example.com", transport.getString("host"))
+    }
+
+    @Test
+    fun `vmess http upgrade transport is emitted without falling back to tcp`() {
+        val vmess = profile.copy(
+            protocol = Protocol.Vmess,
+            uuid = "96b0101c-0eb9-4089-9a00-111122223333",
+            transport = "httpupgrade",
+            path = "/upgrade",
+            host = "cdn.example.com",
+        )
+        val outbound = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(vmess))))
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+        val transport = outbound.getJSONObject("transport")
+
+        assertEquals("httpupgrade", transport.getString("type"))
+        assertEquals("/upgrade", transport.getString("path"))
+        assertEquals("cdn.example.com", transport.getString("host"))
+    }
+
+    @Test
+    fun `trojan xhttp transport reaches sing box unchanged`() {
+        val trojan = profile.copy(
+            protocol = Protocol.Trojan,
+            password = "secret",
+            transport = "xhttp",
+            xhttpMode = "packet-up",
+            path = "/tunnel",
+            host = "cdn.example.com",
+        )
+        val transport = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(trojan))))
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+            .getJSONObject("transport")
+
+        assertEquals("xhttp", transport.getString("type"))
+        assertEquals("packet-up", transport.getString("mode"))
+        assertEquals("/tunnel", transport.getString("path"))
+        assertEquals("cdn.example.com", transport.getString("host"))
+    }
+
+    @Test
+    fun `shadowsocks plugin settings reach sing box unchanged`() {
+        val shadowsocks = profile.copy(
+            protocol = Protocol.Shadowsocks,
+            password = "secret",
+            encryption = "aes-256-gcm",
+            plugin = "v2ray-plugin",
+            pluginOptions = "tls;host=cdn.example.com;path=/ws",
+        )
+        val outbound = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(shadowsocks))))
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+
+        assertEquals("v2ray-plugin", outbound.getString("plugin"))
+        assertEquals("tls;host=cdn.example.com;path=/ws", outbound.getString("plugin_opts"))
     }
 
     @Test

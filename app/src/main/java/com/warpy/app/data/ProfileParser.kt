@@ -61,10 +61,10 @@ object ProfileParser {
         require(server.isNotBlank()) { "VLESS server is missing" }
         require(uri.userInfo.orEmpty().isNotBlank()) { "VLESS UUID is missing" }
 
-        val transport = (
+        val transport = normalizeTransport(
             uri.getQueryParameter("type")
                 ?: uri.getQueryParameter("transport").orEmpty()
-            ).lowercase()
+        )
         if (transport.isNotBlank() && transport !in VLESS_TRANSPORTS) {
             throw IllegalArgumentException("Профиль содержит пока неподдерживаемый транспорт: $transport")
         }
@@ -88,10 +88,18 @@ object ProfileParser {
             publicKey = uri.getQueryParameter("pbk").orEmpty(),
             shortId = uri.getQueryParameter("sid").orEmpty(),
             fingerprint = uri.getQueryParameter("fp") ?: "chrome",
+            alpn = parseAlpn(uri.getQueryParameter("alpn")),
+            allowInsecure = uri.getQueryParameter("allowInsecure").isEnabledParameter() ||
+                uri.getQueryParameter("allow_insecure").isEnabledParameter() ||
+                uri.getQueryParameter("insecure").isEnabledParameter(),
+            packetEncoding = uri.getQueryParameter("packetEncoding")
+                ?: uri.getQueryParameter("packet_encoding").orEmpty(),
             transport = transport,
             host = uri.getQueryParameter("host").orEmpty(),
             path = uri.getQueryParameter("path").orEmpty(),
-            serviceName = uri.getQueryParameter("serviceName").orEmpty(),
+            serviceName = uri.getQueryParameter("serviceName")
+                ?: uri.getQueryParameter("service_name")
+                ?: uri.getQueryParameter("service-name").orEmpty(),
             xhttpMode = if (transport == "xhttp") xhttpMode else "",
             multiplex = uri.getQueryParameter("mux") == "1" || uri.getQueryParameter("multiplex") == "1",
             raw = raw,
@@ -116,6 +124,7 @@ object ProfileParser {
             port = port,
             password = decodeSecret(uri.rawUserInfo),
             sni = params["sni"].orEmpty(),
+            alpn = parseAlpn(params["alpn"]),
             allowInsecure = firstQuery(params, "allowInsecure", "allow_insecure", "insecure")
                 .isEnabledParameter(),
             hysteria2ObfsType = firstQuery(params, "obfs", "obfs-type").ifBlank { if (params.containsKey("obfs-password") || params.containsKey("obfs_password")) "salamander" else "" },
@@ -138,12 +147,19 @@ object ProfileParser {
         require(server.isNotBlank()) { "Trojan server is missing" }
         require(uri.userInfo.orEmpty().isNotBlank()) { "Trojan password is missing" }
 
-        val transport = (
+        val transport = normalizeTransport(
             uri.getQueryParameter("type")
                 ?: uri.getQueryParameter("transport").orEmpty()
-            ).lowercase()
+        )
         if (transport.isNotBlank() && transport !in TROJAN_TRANSPORTS) {
             throw IllegalArgumentException("Профиль содержит пока неподдерживаемый транспорт: $transport")
+        }
+        val xhttpMode = uri.getQueryParameter("mode")
+            .orEmpty()
+            .lowercase()
+            .ifBlank { DEFAULT_XHTTP_MODE }
+        if (transport == "xhttp" && xhttpMode !in XHTTP_MODES) {
+            throw IllegalArgumentException("Unsupported Trojan XHTTP mode: $xhttpMode")
         }
 
         return VpnProfile(
@@ -158,12 +174,17 @@ object ProfileParser {
             publicKey = uri.getQueryParameter("pbk").orEmpty(),
             shortId = uri.getQueryParameter("sid").orEmpty(),
             fingerprint = uri.getQueryParameter("fp") ?: "chrome",
+            alpn = parseAlpn(uri.getQueryParameter("alpn")),
             allowInsecure = uri.getQueryParameter("allowInsecure").isEnabledParameter() ||
+                uri.getQueryParameter("allow_insecure").isEnabledParameter() ||
                 uri.getQueryParameter("insecure").isEnabledParameter(),
             transport = transport,
             host = uri.getQueryParameter("host").orEmpty(),
             path = uri.getQueryParameter("path").orEmpty(),
-            serviceName = uri.getQueryParameter("serviceName").orEmpty(),
+            serviceName = uri.getQueryParameter("serviceName")
+                ?: uri.getQueryParameter("service_name")
+                ?: uri.getQueryParameter("service-name").orEmpty(),
+            xhttpMode = if (transport == "xhttp") xhttpMode else "",
             multiplex = uri.getQueryParameter("mux") == "1" || uri.getQueryParameter("multiplex") == "1",
             raw = raw,
         )
@@ -179,8 +200,14 @@ object ProfileParser {
         require(uuid.isNotBlank()) { "VMess UUID is missing" }
         require(port in 1..65535) { "VMess port is invalid" }
 
-        val transport = json.optString("net", "tcp").lowercase()
+        val transport = normalizeTransport(json.optString("net", "tcp"))
         require(transport in VMESS_TRANSPORTS) { "Unsupported VMess transport: $transport" }
+        val xhttpMode = json.optString("mode")
+            .lowercase()
+            .ifBlank { DEFAULT_XHTTP_MODE }
+        if (transport == "xhttp" && xhttpMode !in XHTTP_MODES) {
+            throw IllegalArgumentException("Unsupported VMess XHTTP mode: $xhttpMode")
+        }
         return VpnProfile(
             name = json.optString("ps").ifBlank { server },
             protocol = Protocol.Vmess,
@@ -190,10 +217,12 @@ object ProfileParser {
             security = json.optString("tls"),
             sni = json.optString("sni"),
             fingerprint = json.optString("fp", "chrome"),
+            alpn = parseAlpn(json.optString("alpn")),
             transport = transport,
             host = json.optString("host"),
             path = json.optString("path"),
             serviceName = json.optString("path").takeIf { transport == "grpc" }.orEmpty(),
+            xhttpMode = if (transport == "xhttp") xhttpMode else "",
             encryption = json.optString("scy", "auto"),
             alterId = json.optString("aid").toIntOrNull() ?: json.optInt("aid", 0),
             packetEncoding = json.optString("packetEncoding"),
@@ -219,7 +248,12 @@ object ProfileParser {
         val uri = URI("ss://${Uri.encode(credential.substring(0, separator))}:${Uri.encode(credential.substring(separator + 1))}@$endpoint")
         val server = uri.host.orEmpty()
         val port = uri.port
+        val pluginSpec = firstQuery(queryParams(uri.rawQuery.orEmpty()), "plugin")
+        val pluginParts = pluginSpec.split(';', limit = 2)
+        val plugin = pluginParts.firstOrNull().orEmpty().trim()
+        val pluginOptions = pluginParts.getOrNull(1).orEmpty()
         require(server.isNotBlank() && port in 1..65535) { "Shadowsocks server is invalid" }
+        require(plugin.isBlank() || plugin in SHADOWSOCKS_PLUGINS) { "Unsupported Shadowsocks plugin: $plugin" }
         return VpnProfile(
             name = name.ifBlank { server },
             protocol = Protocol.Shadowsocks,
@@ -227,6 +261,8 @@ object ProfileParser {
             port = port,
             password = credential.substring(separator + 1),
             encryption = credential.substring(0, separator),
+            plugin = plugin,
+            pluginOptions = pluginOptions,
             raw = raw,
         )
     }
@@ -293,6 +329,7 @@ object ProfileParser {
             uuid = uuid,
             password = decodeSecret(credentials.getOrNull(1)),
             sni = firstQuery(params, "sni", "peer"),
+            alpn = parseAlpn(params["alpn"]),
             allowInsecure = firstQuery(params, "allowInsecure", "allow_insecure", "insecure").isEnabledParameter(),
             congestionControl = firstQuery(params, "congestion_control", "congestion-control").ifBlank { "cubic" },
             udpRelayMode = firstQuery(params, "udp_relay_mode", "udp-relay-mode").ifBlank { "native" },
@@ -312,6 +349,7 @@ object ProfileParser {
             port = uri.port.takeIf { it > 0 } ?: 443,
             password = firstQuery(params, "auth", "auth_str", "auth-str").ifBlank { decodeSecret(uri.rawUserInfo) },
             sni = firstQuery(params, "sni", "peer"),
+            alpn = parseAlpn(params["alpn"]),
             allowInsecure = firstQuery(params, "allowInsecure", "allow_insecure", "insecure").isEnabledParameter(),
             hysteria2ObfsPassword = firstQuery(params, "obfs", "obfs-password", "obfs_password"),
             hysteria2UpMbps = firstQuery(params, "upmbps", "up_mbps").toIntOrNull() ?: 0,
@@ -326,6 +364,13 @@ object ProfileParser {
         return Base64.getDecoder().decode(padded).toString(Charsets.UTF_8)
     }
 
+    private fun normalizeTransport(value: String): String = when (val normalized = value.trim().lowercase()) {
+        "h2" -> "http"
+        "http-upgrade", "http_upgrade" -> "httpupgrade"
+        "splithttp", "split-http", "split_http" -> "xhttp"
+        else -> normalized
+    }
+
     private fun queryParams(rawQuery: String): Map<String, String> =
         rawQuery.split('&')
             .asSequence()
@@ -338,6 +383,12 @@ object ProfileParser {
 
     private fun firstQuery(params: Map<String, String>, vararg names: String): String =
         names.firstNotNullOfOrNull { params[it]?.takeIf(String::isNotBlank) }.orEmpty()
+
+    private fun parseAlpn(value: String?): List<String> = value
+        .orEmpty()
+        .split(',')
+        .map(String::trim)
+        .filter(String::isNotBlank)
 
     private fun String?.isEnabledParameter(): Boolean =
         this.equals("1", ignoreCase = true) || this.equals("true", ignoreCase = true)
@@ -357,9 +408,11 @@ object ProfileParser {
         pattern = "(?i)(vless|hysteria2|hy2|trojan|vmess|ss|socks5?|wg|wireguard|tuic|hysteria)://[^\\s<>\"']+",
     )
 
-    private val VLESS_TRANSPORTS = setOf("tcp", "ws", "grpc", "xhttp")
-    private val TROJAN_TRANSPORTS = setOf("tcp", "ws", "grpc")
-    private val VMESS_TRANSPORTS = setOf("tcp", "ws", "grpc", "http", "httpupgrade")
+    private val V2RAY_TRANSPORTS = setOf("tcp", "raw", "ws", "grpc", "http", "httpupgrade", "xhttp")
+    private val VLESS_TRANSPORTS = V2RAY_TRANSPORTS
+    private val TROJAN_TRANSPORTS = V2RAY_TRANSPORTS
+    private val VMESS_TRANSPORTS = V2RAY_TRANSPORTS
+    private val SHADOWSOCKS_PLUGINS = setOf("obfs-local", "v2ray-plugin")
     private val XHTTP_MODES = setOf("stream-up", "stream-one", "packet-up")
     private const val DEFAULT_XHTTP_MODE = "stream-one"
 }

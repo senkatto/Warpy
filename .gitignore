@@ -5,6 +5,9 @@
 build/
 app/build/
 tmp/
+/.artifacts/
+/desktop-tauri/target-codex-update/
+/.tmp-audit-aar/
 .tmp/
 .backups/
 .playwright-cli/

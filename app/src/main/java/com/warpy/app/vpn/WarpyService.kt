@@ -42,7 +42,6 @@ import com.warpy.app.vpn.session.CancellableJobOwner
 import com.warpy.app.vpn.session.DefaultCoreGateway
 import com.warpy.app.vpn.session.ElapsedClock
 import com.warpy.app.vpn.session.OutboundSwitchResult
-import com.warpy.app.vpn.session.PreferredRetryResult
 import com.warpy.app.vpn.session.RecoveryRequest
 import com.warpy.app.vpn.session.SessionValidationResult
 import com.warpy.app.vpn.session.TunnelValidationRequest
@@ -214,16 +213,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             request: RecoveryRequest,
         ): ConnectionRecoveryResult = recoverConnectionBounded(request)
 
-        override suspend fun retryPreferredOutbound(
-            generation: Long,
-            preferredProfileTag: String,
-            runtimeProfileTag: String,
-        ): PreferredRetryResult = retryPreferredProfile(
-            generation = generation,
-            preferredProfileTag = preferredProfileTag,
-            runtimeProfileTag = runtimeProfileTag,
-        )
-
         override fun cancelOperations(generation: Long) {
             cancelWakeProbeWork()
         }
@@ -389,8 +378,9 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             Log.w(TAG, "Switch call failed, keeping previous active outbound")
             val previousIsValid = runConnectionProbe()
             ensureSessionOperationCurrent(generation)
-            return if (previousIsValid) {
+            return if (previousIsValid &&
                 persistSelectedProfileForSession(generation, previousRuntimeProfileTag)
+            ) {
                 OutboundSwitchResult.RolledBack("Не удалось выбрать новый профиль")
             } else {
                 OutboundSwitchResult.Failed("Не удалось восстановить предыдущий профиль")
@@ -405,9 +395,22 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         val isValid = runConnectionProbe()
         ensureSessionOperationCurrent(generation)
         if (isValid) {
-            persistSelectedProfileForSession(generation, profileTag)
-            Log.i(TAG, "Dynamic switch validation success for outbound $profileTag")
-            return OutboundSwitchResult.Succeeded(profileTag)
+            if (persistSelectedProfileForSession(generation, profileTag)) {
+                Log.i(TAG, "Dynamic switch validation success for outbound $profileTag")
+                return OutboundSwitchResult.Succeeded(profileTag)
+            }
+
+            Log.e(TAG, "Selected outbound could not be persisted; rolling back")
+            val rollbackSelected = selectOutboundForSession(generation, previousRuntimeProfileTag)
+            val rollbackValid = rollbackSelected && runConnectionProbe()
+            ensureSessionOperationCurrent(generation)
+            return if (rollbackValid &&
+                persistSelectedProfileForSession(generation, previousRuntimeProfileTag)
+            ) {
+                OutboundSwitchResult.RolledBack("Не удалось сохранить выбранный профиль")
+            } else {
+                OutboundSwitchResult.Failed("Не удалось восстановить профиль после ошибки сохранения")
+            }
         }
 
         Log.w(
@@ -417,8 +420,9 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         val rollbackSelected = selectOutboundForSession(generation, previousRuntimeProfileTag)
         val rollbackValid = rollbackSelected && runConnectionProbe()
         ensureSessionOperationCurrent(generation)
-        return if (rollbackValid) {
+        return if (rollbackValid &&
             persistSelectedProfileForSession(generation, previousRuntimeProfileTag)
+        ) {
             OutboundSwitchResult.RolledBack(
                 "Не удалось подключиться к новому профилю",
             )
@@ -442,12 +446,11 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             }
         }
 
-    private suspend fun persistSelectedProfileForSession(generation: Long, tag: String) {
+    private suspend fun persistSelectedProfileForSession(generation: Long, tag: String): Boolean =
         stateMutex.withLock {
             ensureSessionOperationCurrent(generation)
             persistSelectedProfile(tag)
         }
-    }
 
     private suspend fun ensureSessionOperationCurrent(generation: Long) {
         currentCoroutineContext().ensureActive()
@@ -462,56 +465,24 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         }
     }
 
-    private fun persistSelectedProfile(tag: String) {
-        val index = tag.removePrefix("profile_").toIntOrNull() ?: return
+    private fun persistSelectedProfile(tag: String): Boolean {
+        val index = tag.removePrefix("profile_").toIntOrNull() ?: return false
         val store = com.warpy.app.data.SettingsStore(this)
-        val selectedSettings = store.load().copy(activeProfileIndex = index)
-        store.save(selectedSettings)
-        saveLastConfig(
-            SingBoxConfigBuilder.build(selectedSettings, filesDir = filesDir.absolutePath),
-        )
-    }
-
-    private suspend fun retryPreferredProfile(
-        generation: Long,
-        preferredProfileTag: String,
-        runtimeProfileTag: String,
-    ): PreferredRetryResult {
-        ensureSessionOperationCurrent(generation)
-        if (explicitStopRequested) {
-            throw CancellationException("VPN stop requested")
+        val currentSettings = store.load()
+        if (index !in currentSettings.profiles.indices) return false
+        val selectedSettings = currentSettings.copy(activeProfileIndex = index)
+        val selectedConfig = runCatching {
+            SingBoxConfigBuilder.build(selectedSettings, filesDir = filesDir.absolutePath)
+        }.getOrElse { error ->
+            Log.e(TAG, "failed to build persisted profile configuration", error)
+            return false
         }
-
-        Log.i(TAG, "Retrying preferred outbound $preferredProfileTag from $runtimeProfileTag")
-        val selectedPreferred = selectOutboundForSession(generation, preferredProfileTag)
-        if (!selectedPreferred) {
-            return if (probeForRecovery()) {
-                PreferredRetryResult.RolledBack
-            } else {
-                PreferredRetryResult.Failed("Current fallback stopped responding")
-            }
+        if (!store.save(selectedSettings)) {
+            Log.e(TAG, "failed to persist selected profile index=$index")
+            return false
         }
-        setActiveOutboundTag(preferredProfileTag)
-
-        if (profileProtocol(preferredProfileTag)?.isUdpBased == true) {
-            delay(HYSTERIA_RECOVERY_SETTLE_MS)
-        }
-        ensureSessionOperationCurrent(generation)
-        if (probeForRecovery()) {
-            ensureSessionOperationCurrent(generation)
-            Log.i(TAG, "Preferred outbound retry succeeded for $preferredProfileTag")
-            return PreferredRetryResult.Succeeded(preferredProfileTag)
-        }
-
-        Log.w(TAG, "Preferred outbound retry failed; restoring $runtimeProfileTag")
-        val restored = selectOutboundForSession(generation, runtimeProfileTag)
-        val rollbackValid = restored && probeForRecovery()
-        ensureSessionOperationCurrent(generation)
-        return if (rollbackValid) {
-            PreferredRetryResult.RolledBack
-        } else {
-            PreferredRetryResult.Failed("Preferred profile retry rollback failed")
-        }
+        saveLastConfig(selectedConfig)
+        return true
     }
 
     private suspend fun startCoreResources(requestedTag: String) {
@@ -562,7 +533,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         val preferredIndex = preferredTag.removePrefix("profile_").toIntOrNull()
             ?: settings.activeProfileIndex
         val preferredProfile = settings.profiles.getOrNull(preferredIndex)
-        var runtimeTag = activeOutboundTag
+        val runtimeTag = activeOutboundTag
             ?: sessionRuntime?.snapshot()?.runtimeProfileTag
             ?: preferredTag
 
@@ -582,37 +553,11 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             delay(3_000)
         }
 
-        var isValid = hasActiveVpnTunnel() && runConnectionProbe()
-        if (!isValid &&
-            runtimeTag == preferredTag &&
-            preferredProfile?.protocol == Protocol.Hysteria2
-        ) {
-            val fallbackIndex = settings.profiles.indexOfFirst {
-                it.protocol == Protocol.Vless || it.protocol == Protocol.Trojan
-            }
-            if (fallbackIndex >= 0) {
-                Log.w(
-                    TAG,
-                    "Hysteria2 UDP connection probe failed, attempting fallback to TCP profile at index $fallbackIndex",
-                )
-                val fallbackTag = "profile_$fallbackIndex"
-                if (selectOutboundSync(fallbackTag)) {
-                    setActiveOutboundTag(fallbackTag)
-                    isValid = hasActiveVpnTunnel() && runConnectionProbe()
-                    if (isValid) {
-                        runtimeTag = fallbackTag
-                        Log.i(TAG, "Fallback to TCP profile index $fallbackIndex succeeded")
-                    }
-                }
-            }
-        }
+        val isValid = hasActiveVpnTunnel() && runConnectionProbe()
 
         return if (isValid) {
             startStatusUpdates()
-            SessionValidationResult(
-                succeeded = true,
-                runtimeProfileTag = runtimeTag,
-            )
+            SessionValidationResult(succeeded = true)
         } else {
             val failure = if (reason == ValidationReason.Initial) {
                 classifyInitialValidationFailure(

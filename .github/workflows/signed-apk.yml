@@ -2,18 +2,6 @@ name: Warpy signed APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - codex/android-always-connected
-    paths:
-      - ".github/workflows/signed-apk.yml"
-      - "app/**"
-      - "build.gradle.kts"
-      - "settings.gradle.kts"
-      - "gradle/**"
-      - "gradle.properties"
-      - "gradlew"
-      - "gradlew.bat"
 
 permissions:
   contents: read

@@ -12,11 +12,6 @@ use std::{
 use crate::vpn_recovery::{RecoveryState, MAX_RECOVERY_ATTEMPTS};
 
 #[cfg(windows)]
-use crate::vpn_health::{
-    current_network_type, VpnAutoSwitchEvent, VpnHealthRecommendation, VpnHealthSnapshot,
-    VpnHealthStore, VpnProfileHealth,
-};
-#[cfg(windows)]
 use crate::vpn_kill_switch::{
     competing_vpn_active, KillSwitchState, VpnKillSwitch, COMPETING_VPN_ERROR,
 };
@@ -24,7 +19,8 @@ use crate::vpn_kill_switch::{
 use crate::vpn_probe::{verify_tunnel, verify_tunnel_once};
 #[cfg(windows)]
 use crate::vpn_selector::{
-    prepare_config as prepare_selector_config, update_selected_outbound, SelectorControl,
+    prepare_config as prepare_selector_config, remove_outbound, update_selected_outbound,
+    SelectorControl,
 };
 
 #[cfg(not(windows))]
@@ -43,18 +39,6 @@ const LOG_TAIL_BYTES: u64 = 8 * 1024;
 const EXPECTED_CORE_SHA256: &str =
     "47FE53E73E99F219DE4495731E348EAE5FF0CFB831E31157B70B95A4BEF0D5B3";
 const EXPECTED_CORE_BYTES: u64 = 65_593_344;
-#[cfg(windows)]
-const HEALTH_HISTORY_FILE: &str = "health.json";
-#[cfg(windows)]
-const AUTO_SWITCH_SETTLE_MS: u64 = 30_000;
-#[cfg(windows)]
-const AUTO_SWITCH_FAILURE_BACKOFF_MS: u64 = 60_000;
-#[cfg(windows)]
-const AUTO_FASTER_HOLD_MS: u64 = 5 * 60_000;
-#[cfg(windows)]
-const AUTO_PREFERRED_RETURN_WAIT_MS: u64 = 2 * 60_000;
-#[cfg(windows)]
-const AUTO_PREFERRED_SUCCESS_CONFIRMATIONS: usize = 2;
 #[cfg(windows)]
 const PHYSICAL_INTERFACE_RETRY_ATTEMPTS: usize = 60;
 #[cfg(windows)]
@@ -111,133 +95,8 @@ pub(crate) struct VpnEngine {
     #[cfg(windows)]
     selector_control: Mutex<Option<SelectorControl>>,
     #[cfg(windows)]
-    health: Mutex<VpnHealthStore>,
-    #[cfg(windows)]
-    auto_switch: Mutex<AutoSwitchState>,
-    #[cfg(windows)]
     kill_switch: Mutex<VpnKillSwitch>,
     recovery: Mutex<RecoveryState>,
-}
-
-#[cfg(windows)]
-#[derive(Debug, Default)]
-struct AutoSwitchState {
-    enabled: bool,
-    blocked_until_ms: u64,
-    faster_hold_until_ms: u64,
-    preferred_outbound: Option<String>,
-    return_target: Option<String>,
-    return_started_at_ms: u64,
-    last_event: Option<VpnAutoSwitchEvent>,
-}
-
-#[cfg(windows)]
-impl AutoSwitchState {
-    fn allows(&self, reason: &str, now_ms: u64) -> bool {
-        self.enabled
-            && now_ms >= self.blocked_until_ms
-            && (reason != "faster" || now_ms >= self.faster_hold_until_ms)
-            && (reason != "faster" || self.return_target.is_none())
-    }
-
-    fn initialize(&mut self, enabled: bool, preferred_outbound: Option<String>) {
-        self.enabled = enabled;
-        self.blocked_until_ms = 0;
-        self.faster_hold_until_ms = 0;
-        self.preferred_outbound = preferred_outbound;
-        self.return_target = None;
-        self.return_started_at_ms = 0;
-        self.last_event = None;
-    }
-
-    fn set_preferred(&mut self, outbound: &str, now_ms: u64) {
-        self.preferred_outbound = Some(outbound.to_string());
-        self.return_target = None;
-        self.return_started_at_ms = 0;
-        self.last_event = None;
-        self.faster_hold_until_ms = now_ms.saturating_add(AUTO_FASTER_HOLD_MS);
-    }
-
-    fn record_success(
-        &mut self,
-        from_outbound: &str,
-        recommendation: &VpnHealthRecommendation,
-        now_ms: u64,
-    ) {
-        self.blocked_until_ms = now_ms.saturating_add(AUTO_SWITCH_SETTLE_MS);
-        self.faster_hold_until_ms = now_ms.saturating_add(AUTO_FASTER_HOLD_MS);
-        if recommendation.reason == "preferred" {
-            self.return_target = None;
-            self.return_started_at_ms = 0;
-        } else if recommendation.reason == "unavailable" && self.return_target.is_none() {
-            if let Some(preferred) = self
-                .preferred_outbound
-                .as_ref()
-                .filter(|preferred| *preferred != &recommendation.outbound)
-            {
-                self.return_target = Some(preferred.clone());
-                self.return_started_at_ms = now_ms;
-            }
-        }
-        self.last_event = Some(VpnAutoSwitchEvent {
-            from_outbound: from_outbound.to_string(),
-            to_outbound: recommendation.outbound.clone(),
-            reason: recommendation.reason.clone(),
-            outcome: "switched".to_string(),
-            observed_at_ms: now_ms,
-        });
-    }
-
-    fn record_failure(
-        &mut self,
-        from_outbound: &str,
-        recommendation: &VpnHealthRecommendation,
-        now_ms: u64,
-    ) {
-        self.blocked_until_ms = now_ms.saturating_add(AUTO_SWITCH_FAILURE_BACKOFF_MS);
-        self.last_event = Some(VpnAutoSwitchEvent {
-            from_outbound: from_outbound.to_string(),
-            to_outbound: recommendation.outbound.clone(),
-            reason: recommendation.reason.clone(),
-            outcome: "failed".to_string(),
-            observed_at_ms: now_ms,
-        });
-    }
-
-    fn preferred_recommendation(
-        &self,
-        active_outbound: &str,
-        profiles: &[VpnProfileHealth],
-        now_ms: u64,
-    ) -> Option<VpnHealthRecommendation> {
-        let target = self.return_target.as_deref()?;
-        if !self.enabled
-            || active_outbound == target
-            || now_ms.saturating_sub(self.return_started_at_ms) < AUTO_PREFERRED_RETURN_WAIT_MS
-        {
-            return None;
-        }
-        let preferred = profiles.iter().find(|profile| profile.outbound == target)?;
-        let candidate_score = preferred.score?;
-        if preferred.consecutive_successes < AUTO_PREFERRED_SUCCESS_CONFIRMATIONS
-            || preferred
-                .last_checked_at_ms
-                .is_none_or(|checked_at| checked_at < self.return_started_at_ms)
-        {
-            return None;
-        }
-        let active_score = profiles
-            .iter()
-            .find(|profile| profile.outbound == active_outbound)
-            .and_then(|profile| profile.score);
-        Some(VpnHealthRecommendation {
-            outbound: target.to_string(),
-            reason: "preferred".to_string(),
-            active_score,
-            candidate_score,
-            observed_at_ms: now_ms,
-        })
-    }
 }
 
 impl VpnEngine {
@@ -252,10 +111,6 @@ impl VpnEngine {
             desired_kill_switch: Mutex::new(false),
             #[cfg(windows)]
             selector_control: Mutex::new(None),
-            #[cfg(windows)]
-            health: Mutex::new(VpnHealthStore::default()),
-            #[cfg(windows)]
-            auto_switch: Mutex::new(AutoSwitchState::default()),
             #[cfg(windows)]
             kill_switch: Mutex::new(VpnKillSwitch::new()),
             recovery: Mutex::new(RecoveryState::default()),
@@ -298,14 +153,6 @@ impl VpnEngine {
             .map_err(|_| "Управление VPN недоступно".to_string())?;
         self.verify_core(&paths.core)?;
         ensure_wintun(paths)?;
-        #[cfg(windows)]
-        {
-            let history = VpnHealthStore::load(&paths.app_dir.join(HEALTH_HISTORY_FILE), now_ms());
-            *self
-                .health
-                .lock()
-                .map_err(|_| "История качества VPN недоступна".to_string())? = history;
-        }
         Ok(())
     }
 
@@ -338,7 +185,6 @@ impl VpnEngine {
         paths: &EnginePaths,
         config: &str,
         kill_switch: bool,
-        #[cfg(windows)] auto_mode: bool,
     ) -> Result<(), String> {
         let _lifecycle = self
             .lifecycle
@@ -353,15 +199,7 @@ impl VpnEngine {
         #[cfg(not(windows))]
         let prepared_config = config.to_string();
         #[cfg(windows)]
-        let preferred_outbound = selector_control
-            .as_ref()
-            .map(|control| control.selected().to_string());
-        #[cfg(windows)]
         self.set_selector_control(selector_control);
-        #[cfg(windows)]
-        if let Ok(mut auto_switch) = self.auto_switch.lock() {
-            auto_switch.initialize(auto_mode, preferred_outbound);
-        }
         self.set_desired_config(Some(prepared_config.clone()));
         self.set_desired_kill_switch(kill_switch);
         if !kill_switch {
@@ -402,34 +240,7 @@ impl VpnEngine {
             .lifecycle
             .lock()
             .map_err(|_| "Управление VPN недоступно".to_string())?;
-        self.switch_outbound_locked(outbound, None)?;
-        if let Ok(mut auto_switch) = self.auto_switch.lock() {
-            auto_switch.set_preferred(outbound, now_ms());
-        }
-        Ok(())
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn set_preferred_outbound(&self, outbound: &str) -> Result<(), String> {
-        let _lifecycle = self
-            .lifecycle
-            .lock()
-            .map_err(|_| "Управление VPN недоступно".to_string())?;
-        let control_guard = self
-            .selector_control
-            .lock()
-            .map_err(|_| "Управление профилями недоступно".to_string())?;
-        let control = control_guard
-            .as_ref()
-            .ok_or_else(|| "SELECTOR_NOT_AVAILABLE".to_string())?;
-        if !control.supports(outbound) {
-            return Err("SELECTOR_UNKNOWN_OUTBOUND".to_string());
-        }
-        self.auto_switch
-            .lock()
-            .map_err(|_| "Warpy Auto недоступен".to_string())?
-            .set_preferred(outbound, now_ms());
-        Ok(())
+        self.switch_outbound_locked(outbound, None)
     }
 
     #[cfg(windows)]
@@ -438,31 +249,21 @@ impl VpnEngine {
             .lifecycle
             .lock()
             .map_err(|_| "VPN control is unavailable".to_string())?;
+        let mut desired_config = self
+            .desired_config
+            .lock()
+            .map_err(|_| "VPN configuration is unavailable".to_string())?;
+        let updated_config = desired_config
+            .as_deref()
+            .ok_or_else(|| "VPN configuration is unavailable".to_string())
+            .and_then(|config| remove_outbound(config, outbound))?;
         self.selector_control
             .lock()
             .map_err(|_| "Profile control is unavailable".to_string())?
             .as_mut()
             .ok_or_else(|| "SELECTOR_NOT_AVAILABLE".to_string())?
-            .forget(outbound)
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn set_auto_mode(&self, enabled: bool) -> Result<(), String> {
-        let _lifecycle = self
-            .lifecycle
-            .lock()
-            .map_err(|_| "Управление VPN недоступно".to_string())?;
-        let mut auto_switch = self
-            .auto_switch
-            .lock()
-            .map_err(|_| "Warpy Auto недоступен".to_string())?;
-        auto_switch.enabled = enabled;
-        if !enabled {
-            auto_switch.blocked_until_ms = 0;
-            auto_switch.faster_hold_until_ms = 0;
-            auto_switch.return_target = None;
-            auto_switch.return_started_at_ms = 0;
-        }
+            .forget(outbound)?;
+        *desired_config = Some(updated_config);
         Ok(())
     }
 
@@ -513,188 +314,6 @@ impl VpnEngine {
                 Err(error.to_string())
             }
         }
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn health_snapshot(&self) -> Result<VpnHealthSnapshot, String> {
-        let network_type = current_network_type();
-        let (active_outbound, targets) = self
-            .selector_control
-            .lock()
-            .map_err(|_| "Управление профилями недоступно".to_string())?
-            .as_ref()
-            .map(|control| {
-                (
-                    Some(control.selected().to_string()),
-                    control.health_targets(),
-                )
-            })
-            .unwrap_or_else(|| (None, Vec::new()));
-        let mut snapshot = self
-            .health
-            .lock()
-            .map_err(|_| "История качества VPN недоступна".to_string())?
-            .snapshot(&network_type, active_outbound, targets, now_ms());
-        if let Ok(auto_switch) = self.auto_switch.lock() {
-            snapshot.auto_enabled = auto_switch.enabled;
-            snapshot.preferred_outbound = auto_switch.preferred_outbound.clone();
-            snapshot.last_auto_switch = auto_switch.last_event.clone();
-        }
-        Ok(snapshot)
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn maintain_health(&self, paths: &EnginePaths) -> Option<String> {
-        if self.current_state() != EngineState::Connected {
-            return None;
-        }
-        let control = self.selector_control.lock().ok()?.as_ref()?.clone();
-        let active_outbound = control.selected().to_string();
-        let targets = control.health_targets();
-        let network_type = current_network_type();
-        let target = self.health.lock().ok()?.next_probe_target(
-            &active_outbound,
-            &targets,
-            &network_type,
-            now_ms(),
-        )?;
-
-        let result = control.probe_outbound(&target.outbound);
-        let checked_at_ms = now_ms();
-        if self.current_state() != EngineState::Connected {
-            return None;
-        }
-        let current = self.selector_control.lock().ok()?.as_ref()?.clone();
-        let target_is_current = current.same_runtime(&control)
-            && current.profile_id(&target.outbound) == Some(target.profile_id.as_str())
-            && (!target.active || current.selected() == target.outbound);
-        if !target_is_current {
-            return None;
-        }
-
-        let mut events = Vec::new();
-        let (snapshot, serialized) = {
-            let mut health = self.health.lock().ok()?;
-            let urgent =
-                health.record_probe(&target.profile_id, &network_type, checked_at_ms, result);
-            let current_targets = current.health_targets();
-            health.refresh_recommendation(
-                &network_type,
-                current.selected(),
-                &current_targets,
-                checked_at_ms,
-            );
-            let snapshot = health.snapshot(
-                &network_type,
-                Some(current.selected().to_string()),
-                current_targets,
-                checked_at_ms,
-            );
-            let serialized = if health.persistence_due(checked_at_ms, urgent) {
-                match health.serialized() {
-                    Ok(serialized) => Some(serialized),
-                    Err(error) => {
-                        events.push(format!("health: {error}"));
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-            (snapshot, serialized)
-        };
-
-        if let Some(serialized) = serialized {
-            match write_atomic(&paths.app_dir.join(HEALTH_HISTORY_FILE), &serialized) {
-                Ok(()) => {
-                    if let Ok(mut health) = self.health.lock() {
-                        health.mark_persisted(checked_at_ms);
-                    }
-                }
-                Err(error) => events.push(format!("health: не удалось сохранить историю: {error}")),
-            }
-        }
-
-        let preferred_recommendation = self.auto_switch.lock().ok().and_then(|auto_switch| {
-            auto_switch.preferred_recommendation(
-                current.selected(),
-                &snapshot.profiles,
-                checked_at_ms,
-            )
-        });
-        if let Some(recommendation) = preferred_recommendation.or(snapshot.recommendation) {
-            if let Some(event) = self.maybe_auto_switch(&current, &recommendation, checked_at_ms) {
-                events.push(event);
-            }
-        }
-
-        (!events.is_empty()).then(|| events.join("; "))
-    }
-
-    #[cfg(windows)]
-    fn maybe_auto_switch(
-        &self,
-        expected_control: &SelectorControl,
-        recommendation: &VpnHealthRecommendation,
-        observed_at_ms: u64,
-    ) -> Option<String> {
-        let _lifecycle = self.lifecycle.try_lock().ok()?;
-        if self.current_state() != EngineState::Connected {
-            return None;
-        }
-        let current_control = self.selector_control.lock().ok()?.as_ref()?.clone();
-        if !current_control.same_runtime(expected_control)
-            || current_control.selected() != expected_control.selected()
-        {
-            return None;
-        }
-        if !self
-            .auto_switch
-            .lock()
-            .ok()?
-            .allows(&recommendation.reason, observed_at_ms)
-        {
-            return None;
-        }
-
-        let expected_current = expected_control.selected();
-        let result = self.switch_outbound_locked(&recommendation.outbound, Some(expected_current));
-        if matches!(result.as_ref(), Err(error) if error == "AUTO_STALE_RECOMMENDATION") {
-            return None;
-        }
-
-        let mut auto_switch = self.auto_switch.lock().ok()?;
-        match result {
-            Ok(()) => {
-                auto_switch.record_success(expected_current, recommendation, observed_at_ms);
-                Some(format!(
-                    "Warpy Auto: {expected_current} -> {} ({})",
-                    recommendation.outbound, recommendation.reason
-                ))
-            }
-            Err(error) => {
-                auto_switch.record_failure(expected_current, recommendation, observed_at_ms);
-                Some(format!("Warpy Auto: switch failed ({error})"))
-            }
-        }
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn persist_health(&self, paths: &EnginePaths) -> Result<(), String> {
-        let health = self
-            .health
-            .lock()
-            .map_err(|_| "История качества VPN недоступна".to_string())?;
-        if !health.is_dirty() {
-            return Ok(());
-        }
-        let serialized = health.serialized()?;
-        drop(health);
-        write_atomic(&paths.app_dir.join(HEALTH_HISTORY_FILE), &serialized)?;
-        if let Ok(mut health) = self.health.lock() {
-            health.mark_persisted(now_ms());
-        }
-        Ok(())
     }
 
     pub(crate) fn maintain(&self, paths: &EnginePaths) -> Option<String> {
@@ -1642,10 +1261,7 @@ pub(crate) fn read_vpn_network_stats() -> Result<VpnNetworkStats, String> {
 
 #[cfg(test)]
 mod log_tests {
-    use super::{
-        is_tunnel_interface, last_log_message, set_default_interface, AutoSwitchState, EngineState,
-    };
-    use crate::vpn_health::{VpnHealthRecommendation, VpnProfileHealth};
+    use super::{is_tunnel_interface, last_log_message, set_default_interface, EngineState};
 
     #[test]
     fn runtime_config_is_bound_to_the_physical_interface() {
@@ -1687,80 +1303,5 @@ mod log_tests {
         assert_eq!(EngineState::Connected.label(), "Connected");
         assert_eq!(EngineState::Recovering.label(), "Recovering");
         assert_eq!(EngineState::Stopping.label(), "Stopping");
-    }
-
-    #[test]
-    fn auto_switch_policy_respects_manual_hold_and_failure_backoff() {
-        let faster = VpnHealthRecommendation {
-            outbound: "profile-2".to_string(),
-            reason: "faster".to_string(),
-            active_score: Some(150),
-            candidate_score: 80,
-            observed_at_ms: 1_000,
-        };
-        let mut state = AutoSwitchState {
-            enabled: true,
-            ..AutoSwitchState::default()
-        };
-
-        assert!(state.allows("faster", 1_000));
-        state.set_preferred("profile-1", 1_000);
-        assert!(!state.allows("faster", 1_001));
-        assert!(state.allows("unavailable", 1_001));
-
-        state.record_failure("profile-1", &faster, 2_000);
-        assert!(!state.allows("unavailable", 2_001));
-        assert_eq!(state.last_event.as_ref().unwrap().outcome, "failed");
-    }
-
-    #[test]
-    fn preferred_return_requires_wait_and_two_fresh_successes() {
-        let failover = VpnHealthRecommendation {
-            outbound: "profile-2".to_string(),
-            reason: "unavailable".to_string(),
-            active_score: None,
-            candidate_score: 75,
-            observed_at_ms: 1_000,
-        };
-        let mut state = AutoSwitchState::default();
-        state.initialize(true, Some("profile-1".to_string()));
-        state.record_success("profile-1", &failover, 1_000);
-
-        let mut profiles = vec![profile_health("profile-1", 90, 1, 120_000)];
-        assert!(state
-            .preferred_recommendation("profile-2", &profiles, 121_000)
-            .is_none());
-
-        profiles[0].consecutive_successes = 2;
-        let recommendation = state
-            .preferred_recommendation("profile-2", &profiles, 121_000)
-            .expect("preferred profile recovered");
-        assert_eq!(recommendation.outbound, "profile-1");
-        assert_eq!(recommendation.reason, "preferred");
-
-        state.record_success("profile-2", &recommendation, 121_000);
-        assert!(state.return_target.is_none());
-    }
-
-    fn profile_health(
-        outbound: &str,
-        score: u64,
-        consecutive_successes: usize,
-        checked_at_ms: u64,
-    ) -> VpnProfileHealth {
-        VpnProfileHealth {
-            outbound: outbound.to_string(),
-            profile_id: "0".repeat(64),
-            sample_count: consecutive_successes,
-            handshake_ok: Some(true),
-            latency_ms: Some(score),
-            jitter_ms: Some(0),
-            loss_percent: Some(0),
-            last_error: None,
-            last_checked_at_ms: Some(checked_at_ms),
-            successful_samples: consecutive_successes,
-            consecutive_successes,
-            score: Some(score),
-        }
     }
 }

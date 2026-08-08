@@ -133,21 +133,21 @@ class VpnSessionReducerTest {
     }
 
     @Test
-    fun `choosing the active fallback makes it preferred without a network switch`() {
-        val fallbackConnected = connectedSession("profile_0").copy(
+    fun `choosing the current runtime profile makes it preferred without a network switch`() {
+        val connectedWithDifferentPreference = connectedSession("profile_0").copy(
             preferredProfileTag = "profile_1",
             runtimeProfileTag = "profile_0",
         )
         val selected = reducer.reduce(
-            fallbackConnected,
+            connectedWithDifferentPreference,
             VpnSessionEvent.SwitchRequested("profile_0"),
         )
 
         assertEquals("profile_0", selected.snapshot.preferredProfileTag)
         assertEquals("profile_0", selected.snapshot.runtimeProfileTag)
-        assertEquals(fallbackConnected.generation + 1L, selected.snapshot.generation)
+        assertEquals(connectedWithDifferentPreference.generation + 1L, selected.snapshot.generation)
         assertEquals(
-            listOf(VpnSessionEffect.CancelOperations(fallbackConnected.generation)),
+            listOf(VpnSessionEffect.CancelOperations(connectedWithDifferentPreference.generation)),
             selected.effects,
         )
     }
@@ -379,62 +379,6 @@ class VpnSessionReducerTest {
                 ),
             ),
             failed.effects.single(),
-        )
-    }
-
-    @Test
-    fun `temporary fallback schedules preferred profile retry`() {
-        val validating = validatingSession("profile_0")
-        val fallback = reducer.reduce(
-            validating,
-            VpnSessionEvent.ValidationSucceeded(
-                generation = validating.generation,
-                runtimeProfileTag = "profile_1",
-            ),
-        )
-
-        assertEquals(VpnState.Connected, fallback.snapshot.state)
-        assertEquals("profile_0", fallback.snapshot.preferredProfileTag)
-        assertEquals("profile_1", fallback.snapshot.runtimeProfileTag)
-        assertEquals(
-            VpnSessionEffect.SchedulePreferredRetry(validating.generation),
-            fallback.effects.single(),
-        )
-    }
-
-    @Test
-    fun `preferred retry due targets preferred while fallback remains connected`() {
-        val fallback = connectedSession("profile_0").copy(runtimeProfileTag = "profile_1")
-        val due = reducer.reduce(
-            fallback,
-            VpnSessionEvent.PreferredRetryDue(fallback.generation),
-        )
-
-        assertEquals(VpnState.Connected, due.snapshot.state)
-        assertEquals(
-            VpnSessionEffect.RetryPreferredOutbound(
-                generation = fallback.generation,
-                preferredProfileTag = "profile_0",
-                runtimeProfileTag = "profile_1",
-            ),
-            due.effects.single(),
-        )
-    }
-
-    @Test
-    fun `preferred retry rollback keeps fallback and reschedules`() {
-        val fallback = connectedSession("profile_0").copy(runtimeProfileTag = "profile_1")
-        val rolledBack = reducer.reduce(
-            fallback,
-            VpnSessionEvent.PreferredRetryRolledBack(fallback.generation),
-        )
-
-        assertEquals("profile_0", rolledBack.snapshot.preferredProfileTag)
-        assertEquals("profile_1", rolledBack.snapshot.runtimeProfileTag)
-        assertEquals(VpnState.Connected, rolledBack.snapshot.state)
-        assertEquals(
-            VpnSessionEffect.SchedulePreferredRetry(fallback.generation),
-            rolledBack.effects.single(),
         )
     }
 

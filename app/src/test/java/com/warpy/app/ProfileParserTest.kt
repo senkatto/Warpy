@@ -32,7 +32,8 @@ class ProfileParserTest {
     fun testParseVlessReality() {
         val link = "vless://96b0101c-0eb9-4089-9a00-111122223333@1.2.3.4:443" +
                 "?security=reality&sni=yahoo.com&flow=xtls-rprx-vision" +
-                "&pbk=pubkey123&sid=shortid123&fp=chrome#My%20Reality%20Profile"
+                "&pbk=pubkey123&sid=shortid123&fp=chrome" +
+                "&alpn=h2%2Chttp%2F1.1&packetEncoding=packetaddr#My%20Reality%20Profile"
 
         val result = ProfileParser.parse(link)
         assertTrue(result.isSuccess)
@@ -49,6 +50,8 @@ class ProfileParserTest {
         assertEquals("pubkey123", profile.publicKey)
         assertEquals("shortid123", profile.shortId)
         assertEquals("chrome", profile.fingerprint)
+        assertEquals(listOf("h2", "http/1.1"), profile.alpn)
+        assertEquals("packetaddr", profile.packetEncoding)
     }
 
     @Test
@@ -56,7 +59,7 @@ class ProfileParserTest {
         val link = "hysteria2://myPassword123@5.6.7.8:8443" +
                 "?insecure=1&sni=google.com&obfs=salamander&obfs-password=obfsPass" +
                 "&server_ports=20000-30000&hop_interval=5s&hop_interval_max=10s" +
-                "&up_mbps=150&down_mbps=200#Hysteria2%20Profile"
+                "&up_mbps=150&down_mbps=200&alpn=h3%2Chy2#Hysteria2%20Profile"
 
         val result = ProfileParser.parse(link)
         assertTrue(result.isSuccess)
@@ -76,6 +79,7 @@ class ProfileParserTest {
         assertEquals("10s", profile.hysteria2HopIntervalMax)
         assertEquals(150, profile.hysteria2UpMbps)
         assertEquals(200, profile.hysteria2DownMbps)
+        assertEquals(listOf("h3", "hy2"), profile.alpn)
     }
 
     @Test
@@ -168,6 +172,28 @@ class ProfileParserTest {
     }
 
     @Test
+    fun testParseVlessTlsAndGrpcAliases() {
+        val profile = ProfileParser.parse(
+            "vless://96b0101c-0eb9-4089-9a00-111122223333@1.2.3.4:443" +
+                "?security=tls&allow_insecure=true&type=grpc&service_name=warpy#Aliases",
+        ).getOrThrow()
+
+        assertTrue(profile.allowInsecure)
+        assertEquals("warpy", profile.serviceName)
+    }
+
+    @Test
+    fun testParseTrojanGrpcAliases() {
+        val profile = ProfileParser.parse(
+            "trojan://secret@1.2.3.4:443" +
+                "?security=tls&allow_insecure=1&type=grpc&service_name=warpy#Aliases",
+        ).getOrThrow()
+
+        assertTrue(profile.allowInsecure)
+        assertEquals("warpy", profile.serviceName)
+    }
+
+    @Test
     fun testParseVlessXhttpStreamUp() {
         val link = "vless://96b0101c-0eb9-4089-9a00-111122223333@1.2.3.4:443" +
             "?type=xhttp&mode=stream-up&path=%2Fwarpy&host=cdn.example.com#XHTTP%20Profile"
@@ -189,10 +215,64 @@ class ProfileParserTest {
     }
 
     @Test
-    fun testRejectTrojanXhttp() {
-        val link = "trojan://password@1.2.3.4:443?type=xhttp"
+    fun testParseVlessHttpUpgradeTransport() {
+        val profile = ProfileParser.parse(
+            "vless://96b0101c-0eb9-4089-9a00-111122223333@1.2.3.4:443" +
+                "?type=httpupgrade&path=%2Ftunnel&host=cdn.example.com#HTTPUpgrade",
+        ).getOrThrow()
 
-        assertTrue(ProfileParser.parse(link).isFailure)
+        assertEquals("httpupgrade", profile.transport)
+        assertEquals("/tunnel", profile.path)
+        assertEquals("cdn.example.com", profile.host)
+    }
+
+    @Test
+    fun testNormalizesCommonTransportAliases() {
+        val fixtures = mapOf(
+            "h2" to "http",
+            "http-upgrade" to "httpupgrade",
+            "splithttp" to "xhttp",
+        )
+
+        fixtures.forEach { (source, expected) ->
+            val profile = ProfileParser.parse(
+                "vless://00000000-0000-4000-8000-000000000001@example.com:443?type=$source#Alias",
+            ).getOrThrow()
+            assertEquals(expected, profile.transport)
+        }
+    }
+
+    @Test
+    fun testParseShadowsocksPlugin() {
+        val profile = ProfileParser.parse(
+            "ss://YWVzLTI1Ni1nY206c2VjcmV0@ss.example.com:8388" +
+                "?plugin=v2ray-plugin%3Btls%3Bhost%3Dcdn.example.com%3Bpath%3D%2Fws#SS",
+        ).getOrThrow()
+
+        assertEquals("v2ray-plugin", profile.plugin)
+        assertEquals("tls;host=cdn.example.com;path=/ws", profile.pluginOptions)
+    }
+
+    @Test
+    fun testRejectUnsupportedShadowsocksPlugin() {
+        val result = ProfileParser.parse(
+            "ss://YWVzLTI1Ni1nY206c2VjcmV0@ss.example.com:8388?plugin=unknown-plugin#SS",
+        )
+
+        assertTrue(result.isFailure)
+    }
+
+    @Test
+    fun testParseTrojanXhttpTransport() {
+        val profile = ProfileParser.parse(
+            "trojan://password@1.2.3.4:443" +
+                "?type=xhttp&mode=packet-up&path=%2Ftunnel&host=cdn.example.com#Trojan-XHTTP",
+        ).getOrThrow()
+
+        assertEquals("xhttp", profile.transport)
+        assertEquals("packet-up", profile.xhttpMode)
+        assertEquals("/tunnel", profile.path)
+        assertEquals("cdn.example.com", profile.host)
     }
 
     @Test

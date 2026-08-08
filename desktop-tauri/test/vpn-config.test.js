@@ -9,7 +9,38 @@ import {
   buildSelectableSingBoxConfig,
   buildSingBoxConfig,
   parseProfileLink,
+  profileShareLink,
 } from '../src/vpn-config.js';
+
+test('serializes structured profiles for every advertised protocol', () => {
+  const vmessPayload = Buffer.from(JSON.stringify({
+    v: '2', ps: 'VMess', add: 'vmess.example.com', port: '443',
+    id: '00000000-0000-4000-8000-000000000123', aid: '0', scy: 'auto', net: 'ws',
+    host: 'cdn.example.com', path: '/ws', tls: 'tls', sni: 'cdn.example.com',
+  })).toString('base64');
+  const fixtures = [
+    'vless://00000000-0000-4000-8000-000000000001@vless.example.com:443?security=reality&sni=www.example.com&pbk=public-key&sid=0123abcd&type=xhttp&mode=stream-up&path=%2Fvpn#VLESS',
+    'trojan://secret@trojan.example.com:443?security=tls&sni=trojan.example.com&type=grpc&serviceName=vpn#Trojan',
+    'hysteria2://secret@hy2.example.com:2443?sni=hy2.example.com&obfs=salamander&obfs-password=pepper&up_mbps=50&down_mbps=100#HY2',
+    `vmess://${vmessPayload}`,
+    'ss://YWVzLTI1Ni1nY206c2VjcmV0@ss.example.com:8388?plugin=v2ray-plugin%3Btls%3Bhost%3Dcdn.example.com#SS',
+    'socks5://user:pass@socks.example.com:1080#SOCKS',
+    'wg://wg.example.com:51820?pk=private&peer_pk=public&pre_shared_key=shared&local_address=10.0.0.2%2F32&mtu=1380#WG',
+    'tuic://00000000-0000-4000-8000-000000000123:secret@tuic.example.com:443?sni=tuic.example.com&congestion_control=bbr#TUIC',
+    'hysteria://hy.example.com:443?auth=secret&peer=hy.example.com&upmbps=50&downmbps=100#Hysteria',
+  ];
+
+  for (const fixture of fixtures) {
+    const parsed = parseProfileLink(fixture);
+    assert.ok(parsed, fixture);
+    const structured = { ...parsed, raw: '' };
+    const reparsed = parseProfileLink(profileShareLink(structured));
+    assert.equal(reparsed?.protocol, parsed.protocol, fixture);
+    assert.equal(reparsed?.host, parsed.host, fixture);
+    assert.equal(reparsed?.port, parsed.port, fixture);
+    assert.equal(reparsed?.uuid, parsed.uuid, fixture);
+  }
+});
 
 test('parses Hysteria2 obfuscation and preserves credentials', () => {
   const profile = parseProfileLink('hysteria2://secret@example.com:2443/?insecure=1&sni=cdn.example.com&obfs=salamander&obfs-password=pepper#Fast');
@@ -20,6 +51,16 @@ test('parses Hysteria2 obfuscation and preserves credentials', () => {
   const tls = buildSingBoxConfig(profile).outbounds[0].tls;
   assert.equal(tls.server_name, 'cdn.example.com');
   assert.equal(tls.insecure, true);
+});
+
+test('preserves colons in opaque Trojan and Hysteria2 passwords', () => {
+  const trojan = parseProfileLink('trojan://secret:part@trojan.example.com:443#Trojan');
+  const hysteria2 = parseProfileLink('hysteria2://secret:part@hy2.example.com:443#HY2');
+
+  assert.equal(trojan.uuid, 'secret:part');
+  assert.equal(buildSingBoxConfig(trojan).outbounds[0].password, 'secret:part');
+  assert.equal(hysteria2.uuid, 'secret:part');
+  assert.equal(buildSingBoxConfig(hysteria2).outbounds[0].password, 'secret:part');
 });
 
 test('auto-detects and builds common profile link protocols', () => {
@@ -91,11 +132,52 @@ test('builds VLESS XHTTP with an explicit streaming mode', () => {
 
   assert.deepEqual(outbound.transport, {
     type: 'xhttp',
-    mode: 'stream-one',
+    mode: 'stream-up',
     path: '/xhttp',
     host: 'www.example.com',
   });
   assert.deepEqual(outbound.tls.alpn, ['h2']);
+});
+
+test('uses protocol-specific default ports without inventing a Shadowsocks port', () => {
+  assert.equal(parseProfileLink('socks5://user:pass@socks.example.com#SOCKS').port, 1080);
+  assert.equal(
+    parseProfileLink(
+      'wg://wg.example.com?pk=private&peer_pk=public&local_address=10.0.0.2%2F32#WG',
+    ).port,
+    51820,
+  );
+  assert.equal(parseProfileLink('ss://YWVzLTI1Ni1nY206c2VjcmV0@ss.example.com#SS'), null);
+});
+
+test('preserves supported Shadowsocks SIP002 plugin options', () => {
+  const profile = parseProfileLink(
+    'ss://YWVzLTI1Ni1nY206c2VjcmV0@ss.example.com:8388'
+      + '?plugin=v2ray-plugin%3Btls%3Bhost%3Dcdn.example.com%3Bpath%3D%2Fws#SS',
+  );
+  const outbound = buildSingBoxConfig(profile).outbounds[0];
+
+  assert.equal(profile.plugin, 'v2ray-plugin');
+  assert.equal(profile.pluginOptions, 'tls;host=cdn.example.com;path=/ws');
+  assert.equal(outbound.plugin, 'v2ray-plugin');
+  assert.equal(outbound.plugin_opts, 'tls;host=cdn.example.com;path=/ws');
+  assert.equal(
+    parseProfileLink('ss://YWVzLTI1Ni1nY206c2VjcmV0@ss.example.com:8388?plugin=unknown#SS'),
+    null,
+  );
+});
+
+test('preserves HTTPUpgrade instead of silently changing it to TCP', () => {
+  const profile = parseProfileLink(
+    'vless://00000000-0000-4000-8000-000000000000@example.com:443'
+      + '?security=tls&type=httpupgrade&path=%2Ftunnel&host=cdn.example.com#HTTPUpgrade',
+  );
+
+  assert.deepEqual(buildSingBoxConfig(profile).outbounds[0].transport, {
+    type: 'httpupgrade',
+    path: '/tunnel',
+    host: 'cdn.example.com',
+  });
 });
 
 test('rejects QUIC only when compatibility mode is enabled', () => {
@@ -201,7 +283,7 @@ test('uses proxy-detoured DNS over HTTPS and bounds slow proxy dials', () => {
   const proxy = config.outbounds.find(outbound => outbound.tag === 'proxy');
   const remoteDns = config.dns.servers.find(server => server.tag === 'remote');
 
-  assert.equal(proxy.connect_timeout, '2s');
+  assert.equal(proxy.connect_timeout, '10s');
   assert.equal(proxy.tcp_keep_alive, '30s');
   assert.equal(proxy.tcp_keep_alive_interval, '15s');
   assert.deepEqual(remoteDns, {
@@ -328,6 +410,20 @@ test('rejects malformed and unsupported links', () => {
   assert.equal(parseProfileLink('vless://missing-host'), null);
   assert.equal(parseProfileLink('ss://secret@example.com:443'), null);
   assert.equal(parseProfileLink('vless://id@example.com:443?type=kcp'), null);
+});
+
+test('normalizes common transport aliases', () => {
+  const fixtures = new Map([
+    ['h2', 'http'],
+    ['http-upgrade', 'httpupgrade'],
+    ['splithttp', 'xhttp'],
+  ]);
+  for (const [source, expected] of fixtures) {
+    const profile = parseProfileLink(
+      `vless://00000000-0000-4000-8000-000000000001@example.com:443?type=${source}#Alias`,
+    );
+    assert.equal(profile.transport, expected);
+  }
 });
 
 test('builds a selector config with every server available for direct dialing', () => {

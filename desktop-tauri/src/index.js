@@ -1,31 +1,23 @@
 import {
   buildRuntimeSingBoxConfig,
   parseProfileLink,
+  profileShareLink,
 } from './vpn-config.js';
 import {
   findProfileIndexAfterSubscriptionUpdate,
   parseSubscriptionPayload,
   replaceSubscriptionProfiles,
   subscriptionDisplayName,
+  subscriptionProfileKey,
   subscriptionProfilesEqual,
   subscriptionRefreshDue,
 } from './subscription.js';
 import { buildTrayProfileSnapshots } from './tray-profiles.js';
 import {
-  autoSwitchNotificationEvent,
   connectivityNotificationTransition,
   createNotificationDedupe,
 } from './significant-notifications.js';
-import {
-  networkProtectionDecision,
-  normalizeNetworkContext,
-} from './network-policy.js';
 import { classifyClipboardImport } from './clipboard-import.js';
-import {
-  buildConnectionRecommendations,
-  classifyConnection,
-  summarizeLatencySamples,
-} from './connection-diagnostics.js';
 import {
   cloudflareDownloadUrl,
   fetchWithTimeout,
@@ -74,36 +66,6 @@ const T = {
     profilesAndSubscriptions: 'Профили и подписки',
     appSection: 'Приложение',
     advancedSection: 'Расширенные настройки',
-    connectionCheckTitle: 'Проверка соединения',
-    connectionCheckIdle: 'Замерим качество VPN и покажем рекомендации',
-    connectionCheckRunning: 'Подготавливаем проверку...',
-    connectionCheckLatency: 'Замеряем задержку: {current} из {total}',
-    connectionCheckDownload: 'Проверяем стабильность загрузки...',
-    connectionCheckNoProfiles: 'Сначала добавьте профиль',
-    connectionCheckFailed: 'Не удалось подтвердить работу VPN',
-    connectionCheckComplete: 'Проверка завершена',
-    connectionCheckApplied: 'Рекомендованные параметры применены',
-    checkAndTune: 'Проверить',
-    connectionReportTitle: 'Результат проверки',
-    connectionReportStable: 'Соединение стабильное',
-    connectionReportImpaired: 'Есть заметные колебания',
-    connectionReportPoor: 'Соединение нестабильное',
-    connectionReportStableDetail: 'Потерь не обнаружено, задержка и её разброс в норме.',
-    connectionReportLatencyDetail: 'Основная проблема — высокая задержка ответа.',
-    connectionReportJitterDetail: 'Основная проблема — нестабильная задержка.',
-    connectionReportLossDetail: 'Основная проблема — часть проверочных запросов не получила ответ.',
-    connectionReportLatency: 'Задержка',
-    connectionReportJitter: 'Разброс',
-    connectionReportLoss: 'Потери',
-    connectionReportDownload: 'Загрузка',
-    connectionReportRecommendations: 'Предлагаемые изменения',
-    connectionReportNoChanges: 'Менять настройки не требуется.',
-    connectionReportAutoTitle: 'Включить выбор лучшего сервера',
-    connectionReportAutoDescription: 'Warpy продолжит сравнивать серверы и переключится только после нескольких подтверждённых замеров.',
-    connectionReportMtuTitle: 'Вернуть автоматический MTU',
-    connectionReportMtuDescription: 'Warpy перестанет использовать заданный вручную размер пакета.',
-    connectionReportApply: 'Применить',
-    connectionReportDone: 'Готово',
     lang: 'Язык',
     langRu: 'Русский',
     langEn: 'English',
@@ -117,26 +79,6 @@ const T = {
     lanDescription: 'Принтеры, телевизоры и другие устройства остаются доступны',
     resumeOnBoot: 'Подключаться после запуска Windows',
     resumeOnBootDescription: 'Восстанавливает защищённое соединение автоматически',
-    networkAutoProtect: 'Защищать в публичных сетях',
-    networkAutoProtectDescription: 'Подключает VPN в незнакомой общедоступной сети',
-    networkAutoProtectOff: 'Выключена',
-    networkAutoProtectTrusted: 'Доверенная сеть',
-    networkAutoProtectPublic: 'VPN включится автоматически',
-    networkAutoProtectProtected: 'Общедоступная сеть защищена',
-    networkAutoProtectBlocked: 'Приостановлена после ручного отключения',
-    networkAutoProtectFailed: 'Автоподключение не удалось',
-    networkAutoProtectUnknown: 'Тип сети не определен',
-    networkAutoProtectOffline: 'Нет подключения к сети',
-    networkAutoProtectNoProfiles: 'Добавьте профиль для автозащиты',
-    warpyAuto: 'Выбирать лучший сервер',
-    warpyAutoDescription: 'Warpy сравнивает доступные серверы и переключается только при заметной разнице',
-    warpyAutoOff: 'Выключен',
-    warpyAutoWatching: 'Следит за качеством соединения',
-    warpyAutoFaster: 'Переключено на более быстрый сервер',
-    warpyAutoUnavailable: 'Переключено: сервер перестал отвечать',
-    warpyAutoReturned: 'Возвращено на выбранный сервер',
-    warpyAutoPreferred: 'Предпочтительный сервер',
-    warpyAutoFailed: 'Автопереключение не удалось',
     killSwitch: 'Блокировать интернет при обрыве VPN',
     killSwitchDescription: 'Не позволяет трафику незаметно уйти напрямую',
     killSwitchTooltip: 'Если VPN неожиданно отключится, Warpy временно заблокирует интернет до восстановления защиты.',
@@ -180,10 +122,6 @@ const T = {
     importLoading: 'Добавление...',
     subscriptionsTitle: 'Подписки',
     updatesTitle: 'Обновления',
-    updateChannel: 'Канал',
-    updateChannelDescription: 'Stable рекомендуется большинству пользователей',
-    updateStable: 'Stable',
-    updateBeta: 'Beta',
     checkUpdates: 'Проверить обновления',
     updateChecking: 'Проверяем обновления...',
     updateLatest: 'Установлена актуальная версия',
@@ -276,36 +214,6 @@ const T = {
     profilesAndSubscriptions: 'Profiles and subscriptions',
     appSection: 'Application',
     advancedSection: 'Advanced settings',
-    connectionCheckTitle: 'Connection check',
-    connectionCheckIdle: 'Measure VPN quality and review recommendations',
-    connectionCheckRunning: 'Preparing the check...',
-    connectionCheckLatency: 'Measuring latency: {current} of {total}',
-    connectionCheckDownload: 'Checking download stability...',
-    connectionCheckNoProfiles: 'Add a profile first',
-    connectionCheckFailed: 'Could not verify the VPN connection',
-    connectionCheckComplete: 'Check complete',
-    connectionCheckApplied: 'Recommended settings applied',
-    checkAndTune: 'Check',
-    connectionReportTitle: 'Connection check result',
-    connectionReportStable: 'Connection is stable',
-    connectionReportImpaired: 'Noticeable fluctuations detected',
-    connectionReportPoor: 'Connection is unstable',
-    connectionReportStableDetail: 'No loss was detected, and latency is consistent.',
-    connectionReportLatencyDetail: 'High response latency is the main issue.',
-    connectionReportJitterDetail: 'Inconsistent latency is the main issue.',
-    connectionReportLossDetail: 'Some diagnostic requests did not receive a response.',
-    connectionReportLatency: 'Latency',
-    connectionReportJitter: 'Jitter',
-    connectionReportLoss: 'Loss',
-    connectionReportDownload: 'Download',
-    connectionReportRecommendations: 'Suggested changes',
-    connectionReportNoChanges: 'No settings need to be changed.',
-    connectionReportAutoTitle: 'Enable best server selection',
-    connectionReportAutoDescription: 'Warpy will keep comparing servers and switch only after several confirmed measurements.',
-    connectionReportMtuTitle: 'Restore automatic MTU',
-    connectionReportMtuDescription: 'Warpy will stop using the manually configured packet size.',
-    connectionReportApply: 'Apply',
-    connectionReportDone: 'Done',
     lang: 'Language',
     langRu: 'Русский',
     langEn: 'English',
@@ -319,26 +227,6 @@ const T = {
     lanDescription: 'Printers, TVs and other devices remain accessible',
     resumeOnBoot: 'Connect after Windows starts',
     resumeOnBootDescription: 'Restores the protected connection automatically',
-    networkAutoProtect: 'Protect on public networks',
-    networkAutoProtectDescription: 'Connects the VPN on an unfamiliar public network',
-    networkAutoProtectOff: 'Off',
-    networkAutoProtectTrusted: 'Trusted network',
-    networkAutoProtectPublic: 'VPN will connect automatically',
-    networkAutoProtectProtected: 'Public network is protected',
-    networkAutoProtectBlocked: 'Paused after manual disconnect',
-    networkAutoProtectFailed: 'Automatic connection failed',
-    networkAutoProtectUnknown: 'Network type is unknown',
-    networkAutoProtectOffline: 'No network connection',
-    networkAutoProtectNoProfiles: 'Add a profile to enable protection',
-    warpyAuto: 'Choose the best server',
-    warpyAutoDescription: 'Warpy compares available servers and switches only when the difference is meaningful',
-    warpyAutoOff: 'Off',
-    warpyAutoWatching: 'Watching connection quality',
-    warpyAutoFaster: 'Switched to a faster server',
-    warpyAutoUnavailable: 'Switched because the server stopped responding',
-    warpyAutoReturned: 'Returned to the selected server',
-    warpyAutoPreferred: 'Preferred server',
-    warpyAutoFailed: 'Automatic switch failed',
     killSwitch: 'Block internet if VPN disconnects',
     killSwitchDescription: 'Prevents traffic from silently going direct',
     killSwitchTooltip: 'If the VPN disconnects unexpectedly, Warpy temporarily blocks internet access until protection is restored.',
@@ -382,10 +270,6 @@ const T = {
     importLoading: 'Importing...',
     subscriptionsTitle: 'Subscriptions',
     updatesTitle: 'Updates',
-    updateChannel: 'Channel',
-    updateChannelDescription: 'Stable is recommended for most users',
-    updateStable: 'Stable',
-    updateBeta: 'Beta',
     checkUpdates: 'Check for updates',
     updateChecking: 'Checking for updates...',
     updateLatest: 'Warpy is up to date',
@@ -469,88 +353,6 @@ const T = {
     subscriptionInvalidUrl: 'The clipboard must contain an HTTPS subscription URL',
     subscriptionError: 'Could not update subscription: ',
   }
-};
-
-T['zh-CN'] = {
-  ...T.en,
-  settings: '设置', connectionSection: '连接', protectionSection: '保护', routingSection: '隧道设置',
-  profilesAndSubscriptions: '配置与订阅', appSection: '应用', advancedSection: '高级设置',
-  lang: '语言', langRu: 'Русский', langEn: 'English',
-  adblock: '拦截广告和跟踪器', adblockDescription: '过滤 VPN 内的已知广告域名',
-  quic: 'QUIC 兼容性', quicDescription: '当网站通过 UDP 不稳定时禁用 QUIC',
-  quicTooltip: 'QUIC 可以加速部分网站，但在某些网络中可能不稳定。仅在遇到问题时启用。',
-  lan: '访问本地网络', lanDescription: '打印机、电视和其他本地设备仍可访问',
-  resumeOnBoot: 'Windows 启动后连接', resumeOnBootDescription: '自动恢复受保护的连接',
-  networkAutoProtect: '在公共网络中自动保护', networkAutoProtectDescription: '连接陌生公共网络时自动启用 VPN',
-  warpyAuto: '选择最佳服务器', warpyAutoDescription: 'Warpy 比较可用服务器，仅在差异明显时切换',
-  killSwitch: 'VPN 断开时阻止网络', killSwitchDescription: '防止流量在未提示的情况下直连',
-  killSwitchTooltip: '如果 VPN 意外断开，Warpy 会暂时阻止网络，直到保护恢复。',
-  apps: '应用', sites: '网站', appsOff: '全部使用 VPN', appsOnly: '仅所选项', appsBypass: '排除所选项',
-  sitesOff: '全部使用 VPN', sitesOnly: '仅所选项', sitesBypass: '排除所选项',
-  browse: '选择文件', running: '从运行中的应用选择',
-  appsListPlaceholder: '例如：chrome.exe, telegram.exe', sitesListPlaceholder: '例如：instagram.com, youtube.com',
-  connected: '已连接', connecting: '正在连接…', disconnected: '未连接', ping: '延迟', speed: '速度',
-  addProfile: '添加配置', clipboardHint: 'Warpy 会自动识别配置或 HTTPS 订阅链接',
-  addClipboardBtn: '从剪贴板导入', importLoading: '正在导入…', subscriptionsTitle: '订阅',
-  updatesTitle: '更新', updateChannel: '更新通道', updateChannelDescription: '建议大多数用户使用 Stable',
-  checkUpdates: '检查更新', updateChecking: '正在检查更新…', updateLatest: 'Warpy 已是最新版本',
-  updateAvailable: '发现新版本', updateInstall: '安装', updateInstalling: '正在安装更新…',
-  diagnosticsTitle: '诊断', exportDiagnostics: '保存诊断信息', diagnosticsSaved: '已保存到下载目录',
-  subscriptionsEmpty: '没有订阅', subscriptionUpdated: '已更新', subscriptionUnchanged: '无变化',
-  subscriptionUpdateError: '更新失败', subscriptionUpdating: '正在更新…', refreshSubscription: '刷新订阅',
-  cancel: '取消', confirm: '添加', close: '关闭', back: '返回', profilesTitle: '配置', emptyMsg: '列表为空',
-  shareTitle: '分享', copy: '复制', runningAppsTitle: '选择应用', excludeSystem: '排除系统应用',
-  searchPlaceholder: '按名称搜索…', nothingFound: '未找到内容', speedtestBtnStart: '开始', speedtestRunning: '测试中…',
-  copySuccess: '链接已复制！', clipboardEmpty: '剪贴板为空', invalidFormat: '剪贴板中必须包含 VPN 配置或 HTTPS 订阅链接',
-  loadingProcesses: '正在加载进程…', failedToStart: '启动失败', failedToConnect: '连接失败',
-  failedToDisconnect: '断开失败', establishingTunnel: '正在建立隧道', addProfileHint: '点击 + 添加配置',
-  cancelled: '已取消', saveBtn: '保存', unsavedSettings: '保存设置更改？', discardChanges: '不保存',
-  restartConfirm: '应用更改需要重启 VPN。现在重启吗？', deleteConfirm: '确定要删除配置',
-  deleteGroupConfirm: '删除分组及其所有服务器', yes: '是', ok: '确定', duplicateProfile: '该配置已添加',
-  connectImportedProfile: '连接到新配置？', otherVpnActive: '连接 Warpy 前请断开其他 VPN',
-  connectionCheckTitle: '连接检查', connectionCheckIdle: '测量 VPN 质量并查看建议',
-  connectionCheckRunning: '正在准备检查…', connectionCheckLatency: '正在测量延迟：{current}/{total}',
-  connectionCheckDownload: '正在检查下载稳定性…', connectionCheckNoProfiles: '请先添加配置',
-  connectionCheckFailed: '无法验证 VPN 连接', connectionCheckComplete: '检查完成',
-  connectionCheckApplied: '已应用建议设置', checkAndTune: '检查', connectionReportTitle: '连接检查结果',
-  connectionReportStable: '连接稳定', connectionReportImpaired: '检测到明显波动', connectionReportPoor: '连接不稳定',
-  connectionReportStableDetail: '未检测到丢包，延迟保持稳定。', connectionReportLatencyDetail: '主要问题是响应延迟较高。',
-  connectionReportJitterDetail: '主要问题是延迟不稳定。', connectionReportLossDetail: '部分诊断请求未收到响应。',
-  connectionReportLatency: '延迟', connectionReportJitter: '抖动', connectionReportLoss: '丢包',
-  connectionReportDownload: '下载', connectionReportRecommendations: '建议更改', connectionReportNoChanges: '无需更改设置。',
-  connectionReportAutoTitle: '启用最佳服务器选择',
-  connectionReportAutoDescription: 'Warpy 将持续比较服务器，并仅在多次测量确认后切换。',
-  connectionReportMtuTitle: '恢复自动 MTU', connectionReportMtuDescription: 'Warpy 将停止使用手动设置的数据包大小。',
-  connectionReportApply: '应用', connectionReportDone: '完成', langDescription: 'Warpy 界面语言',
-  networkAutoProtectOff: '已关闭', networkAutoProtectTrusted: '受信任的网络',
-  networkAutoProtectPublic: 'VPN 将自动连接', networkAutoProtectProtected: '公共网络已受保护',
-  networkAutoProtectBlocked: '手动断开后已暂停', networkAutoProtectFailed: '自动连接失败',
-  networkAutoProtectUnknown: '无法识别网络类型', networkAutoProtectOffline: '没有网络连接',
-  networkAutoProtectNoProfiles: '添加配置以启用自动保护', warpyAutoOff: '已关闭',
-  warpyAutoWatching: '正在监测连接质量', warpyAutoFaster: '已切换到更快的服务器',
-  warpyAutoUnavailable: '服务器停止响应，已自动切换', warpyAutoReturned: '已返回所选服务器',
-  warpyAutoPreferred: '首选服务器', warpyAutoFailed: '自动切换失败', killSwitchOff: '已关闭',
-  killSwitchReady: '随 VPN 一起启用', killSwitchArmed: '已启用', killSwitchSuppressed: '流量由其他 VPN 保护',
-  killSwitchSplitSuppressed: '绕过 VPN 时不可用', killSwitchError: '保护不可用',
-  mtuDescription: '除非技术支持要求，否则请保持自动设置',
-  mtuTooltip: 'MTU 控制网络数据包大小。错误的数值可能导致网站加载变慢或失败。',
-  appsDescription: '选择哪些应用使用 VPN', sitesDescription: '添加需要单独规则的网站',
-  allVpn: '全部使用 VPN', onlySelected: '仅所选项', bypassVpn: '绕过 VPN',
-  updateStable: '稳定版', updateBeta: '测试版', updateRollbackAvailable: '发现可恢复版本',
-  updateFailed: '无法检查更新', updateInstallFailed: '无法安装更新',
-  updateSaveSettings: '更新前请先保存设置', updateInstallConfirm: '安装版本',
-  updateRollbackConfirm: '恢复版本', updateRestartNotice: 'Warpy 和 VPN 将重新启动。',
-  diagnosticsExporting: '正在准备压缩包…', diagnosticsError: '无法保存诊断信息',
-  fileSelectError: '选择文件时出错：', clipboardError: '无法使用剪贴板：',
-  errorPrefix: '错误：', errorLabel: '错误：', serviceUnavailable: 'VPN 服务暂时不可用',
-  mbps: 'Mbps', kbps: 'KB/s', ms: '毫秒', profileSwitchError: '无法切换服务器：',
-  settingsSaveError: '无法保存设置：',
-  settingsLoadError: '无法打开配置。Warpy 不会覆盖数据。请重启应用；如果问题仍然存在，请保存诊断信息。',
-  settingsUnavailable: '配置存储不可用', trafficCheckFailed: 'VPN 隧道中没有数据传输',
-  notificationVpnRestoredTitle: 'VPN 已恢复', notificationVpnRestoredBody: '安全连接已恢复工作',
-  notificationVpnFailedTitle: 'VPN 已断开', notificationVpnFailedBody: 'Warpy 无法恢复安全连接',
-  speedtestFailed: '无法完成测试', subscriptionInvalidUrl: '剪贴板中必须包含 HTTPS 订阅链接',
-  subscriptionError: '无法更新订阅：',
 };
 
 function systemLanguage() {
@@ -647,7 +449,6 @@ function localizeUI() {
   }
   if (!profilesViewGroup) $('profiles-drawer-title').textContent = dict.profilesTitle;
   renderKillSwitchStatus();
-  renderWarpyAutoStatus();
   renderSubscriptions();
   renderUpdateControl();
 }
@@ -736,8 +537,7 @@ const S = {
   active: 0,
   preferredProfileKey: '',
   adblock: false, quic: false, lan: false, killSwitch: false,
-  resumeOnBoot: false, networkAutoProtect: false, warpyAuto: false, mtu: 0,
-  updateChannel: 'stable',
+  resumeOnBoot: false, mtu: 0,
   appsMode: 'off',
   appsList: [],
   sitesMode: 'off',
@@ -758,17 +558,9 @@ const S = {
   connectAttempt: 0,
   showConnectedAlert: false,
   killSwitchServiceStatus: 'Off',
-  vpnHealth: null,
-  healthCheckRunning: false,
-  lastHandledAutoSwitchAt: 0,
   recoveryNotificationPending: false,
   systemNotificationsReady: false,
   runtimeProfileKeys: [],
-  networkContext: normalizeNetworkContext(null),
-  networkAutoHandledGeneration: -1,
-  networkAutoBlocked: false,
-  networkAutoBlockedReason: '',
-  networkAutoConnectRunning: false,
   settingsLoaded: false,
   lang: systemLanguage(),
 };
@@ -783,8 +575,6 @@ let lastTrayMenuSignature = '';
 let failedTrayMenuSignature = '';
 let subscriptionAutoRefreshRunning = false;
 let profilesViewGroup = null;
-let connectionCheckRunning = false;
-let pendingConnectionRecommendations = [];
 const shouldDeliverSystemNotification = createNotificationDedupe();
 
 function uiConnectionStatus() {
@@ -1039,7 +829,6 @@ async function init() {
     autostartLaunch = (await invoke('is_autostart_launch')) === true;
     if (settingsLoaded) {
       await updateResumeOnBootPolicy();
-      await updateWarpyAutoPolicy();
     }
   } catch (error) {
     console.error('Startup policy initialization failed:', error);
@@ -1058,8 +847,6 @@ async function init() {
   requestAnimationFrame(drawFrame);
   if (autostartLaunch && S.resumeOnBoot && S.profiles.length && S.status === 'stopped') {
     await startVpnAfterSystemBoot();
-  } else if (S.networkAutoProtect) {
-    await checkStatus();
   }
   setInterval(checkStatus, 2000);
   startSubscriptionAutoRefreshScheduler();
@@ -1126,9 +913,6 @@ function bindEvents() {
     }
   };
   $('btn-message-ok').onclick = () => hide('overlay-message');
-  $('connection-report-x').onclick = () => hide('overlay-connection-report');
-  $('connection-report-close').onclick = () => hide('overlay-connection-report');
-  $('connection-report-apply').onclick = () => { void applyConnectionRecommendations(); };
   $('settings-unsaved-cancel').onclick = () => hide('overlay-settings-unsaved');
   $('settings-unsaved-discard').onclick = discardSettingsChanges;
   $('settings-unsaved-save').onclick = async () => {
@@ -1212,7 +996,7 @@ function bindEvents() {
   }
 
   // Click outside to close overlays
-  const overlays = ['overlay-profiles', 'overlay-settings', 'overlay-language', 'overlay-share', 'overlay-add', 'overlay-speedtest', 'overlay-running-apps', 'overlay-settings-unsaved', 'overlay-message', 'overlay-connection-report'];
+  const overlays = ['overlay-profiles', 'overlay-settings', 'overlay-language', 'overlay-share', 'overlay-add', 'overlay-speedtest', 'overlay-running-apps', 'overlay-settings-unsaved', 'overlay-message'];
   overlays.forEach(id => {
     $(id).onclick = e => {
       if (e.target === $(id) || e.target.classList.contains('overlay-bg')) {
@@ -1225,10 +1009,7 @@ function bindEvents() {
 
   window.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
-    if (!$('overlay-connection-report').classList.contains('hidden')) {
-      e.preventDefault();
-      hide('overlay-connection-report');
-    } else if (!$('overlay-message').classList.contains('hidden')) {
+    if (!$('overlay-message').classList.contains('hidden')) {
       e.preventDefault();
       hide('overlay-message');
     } else if (!$('overlay-settings-unsaved').classList.contains('hidden')) {
@@ -1364,7 +1145,6 @@ async function saveSettingsFromInputs() {
   S.lan = $('s-lan').checked;
   S.killSwitch = $('s-kill-switch').checked;
   S.resumeOnBoot = $('s-resume-on-boot').checked;
-  S.networkAutoProtect = false;
   S.mtu = normalizeMtu($('s-mtu').value);
   S.lang = normalizeChoice($('s-lang').value, ['ru', 'en'], systemLanguage());
   S.appsMode = normalizeChoice($('s-apps-mode').value, ['off', 'only', 'bypass'], 'off');
@@ -1375,13 +1155,11 @@ async function saveSettingsFromInputs() {
   try {
     await save();
     await updateResumeOnBootPolicy();
-    await updateWarpyAutoPolicy();
   } catch (error) {
     Object.assign(S, previousSettings);
     try {
       await save();
       await updateResumeOnBootPolicy();
-      await updateWarpyAutoPolicy();
     } catch { /* keep the original error */ }
     loadSettingsInputs();
     updateSettingsSaveState();
@@ -1391,11 +1169,6 @@ async function saveSettingsFromInputs() {
 
   localizeUI();
   hide('overlay-settings');
-  if (!S.networkAutoProtect) {
-    S.networkAutoBlocked = false;
-    S.networkAutoBlockedReason = '';
-    S.networkAutoHandledGeneration = -1;
-  }
 
   const tunnelChanged = previousTunnelSettings !== tunnelSettingsSnapshot();
   if (tunnelChanged && (S.status === 'connected' || S.status === 'connecting')) {
@@ -1405,7 +1178,6 @@ async function saveSettingsFromInputs() {
       await startVpn();
     }
   }
-  if (S.networkAutoProtect) await checkStatus();
   return true;
 }
 
@@ -1419,15 +1191,12 @@ function diagnosticsSettingsSummary() {
     lan: S.lan,
     killSwitch: S.killSwitch,
     resumeOnBoot: S.resumeOnBoot,
-    networkAutoProtect: S.networkAutoProtect,
-    warpyAuto: S.warpyAuto,
     mtu: S.mtu,
     appsMode: S.appsMode,
     appRuleCount: S.appsList.length,
     sitesMode: S.sitesMode,
     siteRuleCount: S.sitesList.length,
     language: S.lang,
-    updateChannel: S.updateChannel,
   };
 }
 
@@ -1463,18 +1232,13 @@ let updateUiState = { kind: 'idle', version: '', percent: null };
 let dismissedUpdateVersion = '';
 const UPDATE_AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-function selectedUpdateChannel() {
-  return 'stable';
-}
-
 function renderUpdateControl() {
   const button = $('btn-check-update');
   const status = $('update-status');
   if (!button || !status) return;
 
   const label = button.querySelector('span');
-  const currentChannel = selectedUpdateChannel();
-  const actionable = pendingUpdate?.channel === currentChannel;
+  const actionable = Boolean(pendingUpdate);
   let buttonText = t('checkUpdates');
   let statusText = '';
   let state = '';
@@ -1519,7 +1283,7 @@ function renderUpdateControl() {
 function renderUpdateBanner() {
   const banner = $('update-banner');
   if (!banner) return;
-  const actionable = pendingUpdate && pendingUpdate.channel === selectedUpdateChannel();
+  const actionable = Boolean(pendingUpdate);
   const visible = updateInstallRunning || (
     actionable &&
     pendingUpdate.version !== dismissedUpdateVersion &&
@@ -1560,18 +1324,16 @@ async function bindUpdateProgressEvents() {
 
 async function checkForUpdate({ silent = false } = {}) {
   if (updateCheckRunning || updateInstallRunning) return;
-  const channel = selectedUpdateChannel();
   pendingUpdate = null;
   updateCheckRunning = true;
   if (!silent) updateUiState = { kind: 'checking', version: '', percent: null };
   renderUpdateControl();
   try {
-    const update = await invoke('check_for_update', { channel });
+    const update = await invoke('check_for_update');
     if (!update) {
       if (!silent) updateUiState = { kind: 'latest', version: '', percent: null };
     } else {
       pendingUpdate = {
-        channel,
         version: String(update.version),
         rollback: update.rollback === true,
       };
@@ -1615,7 +1377,6 @@ async function installPendingUpdate() {
   renderUpdateControl();
   try {
     await invoke('install_update', {
-      channel: pendingUpdate.channel,
       expectedVersion: pendingUpdate.version,
     });
   } catch (error) {
@@ -1627,8 +1388,7 @@ async function installPendingUpdate() {
 }
 
 async function handleUpdateAction() {
-  const channel = selectedUpdateChannel();
-  if (pendingUpdate?.channel === channel && (updateUiState.kind === 'available' || updateUiState.kind === 'rollback' || updateUiState.kind === 'saveSettings')) {
+  if (pendingUpdate && (updateUiState.kind === 'available' || updateUiState.kind === 'rollback' || updateUiState.kind === 'saveSettings')) {
     await installPendingUpdate();
     return;
   }
@@ -1656,11 +1416,8 @@ function settingsStateSnapshot() {
     lan: S.lan,
     killSwitch: S.killSwitch,
     resumeOnBoot: S.resumeOnBoot,
-    networkAutoProtect: S.networkAutoProtect,
-    warpyAuto: S.warpyAuto,
     mtu: S.mtu,
     lang: S.lang,
-    updateChannel: S.updateChannel,
     appsMode: S.appsMode,
     appsList: [...S.appsList],
     sitesMode: S.sitesMode,
@@ -1729,8 +1486,6 @@ function show(id) {
     settingsOpenSnapshot = settingsInputsSnapshot();
     updateSettingsSaveState();
     void refreshKillSwitchStatus();
-    void refreshVpnHealth();
-    void refreshNetworkContextDisplay();
     $('app').classList.add('settings-active');
   }
 }
@@ -1769,204 +1524,6 @@ function discardSettingsChanges() {
   hide('overlay-settings');
 }
 
-function setConnectionCheckState(state, text) {
-  const status = $('connection-check-status');
-  if (!status) return;
-  status.dataset.state = state;
-  status.textContent = text;
-}
-
-function resetConnectionCheck() {
-  connectionCheckRunning = false;
-  pendingConnectionRecommendations = [];
-  const button = $('btn-connection-check');
-  if (button) button.disabled = false;
-  setConnectionCheckState('idle', t('connectionCheckIdle'));
-}
-
-const CONNECTION_DIAGNOSTIC_ATTEMPTS = 10;
-
-async function measureDiagnosticLatency(signal) {
-  const samples = await measureLatencySamples({
-    attempts: CONNECTION_DIAGNOSTIC_ATTEMPTS,
-    minSuccessful: 3,
-    pauseMs: 220,
-    signal,
-    timeoutMs: 3500,
-    urlFactory: () => cloudflareDownloadUrl(1024, 'diagnostic'),
-    onAttempt: (current, total) => {
-      setConnectionCheckState(
-        'checking',
-        t('connectionCheckLatency')
-          .replace('{current}', String(current))
-          .replace('{total}', String(total)),
-      );
-    },
-  });
-  return summarizeLatencySamples(samples, CONNECTION_DIAGNOSTIC_ATTEMPTS);
-}
-
-async function measureDiagnosticDownload(signal) {
-  const samples = [];
-  for (let index = 0; index < 2; index++) {
-    const startedAt = performance.now();
-    const response = await fetchWithTimeout(
-      cloudflareDownloadUrl(2_000_000, 'diagnostic-download'),
-      signal,
-      8000,
-    );
-    const body = await response.arrayBuffer();
-    const durationMs = performance.now() - startedAt;
-    if (body.byteLength > 0 && durationMs > 0) {
-      samples.push(toMbps(body.byteLength, durationMs));
-    }
-  }
-  return samples.length ? median(samples) : null;
-}
-
-function connectionFindingKey(metrics) {
-  if (metrics.lossPercent >= 3) return 'connectionReportLossDetail';
-  if (metrics.jitterMs >= 50) return 'connectionReportJitterDetail';
-  if (metrics.latencyMs >= 180) return 'connectionReportLatencyDetail';
-  return 'connectionReportStableDetail';
-}
-
-function connectionQualityTitleKey(quality) {
-  if (quality === 'poor') return 'connectionReportPoor';
-  if (quality === 'impaired') return 'connectionReportImpaired';
-  return 'connectionReportStable';
-}
-
-function createConnectionMetric(labelKey, value) {
-  const row = document.createElement('div');
-  row.className = 'connection-report-metric';
-  row.append(
-    createTextElement('span', 'connection-report-metric-label', t(labelKey)),
-    createTextElement('strong', 'connection-report-metric-value', value),
-  );
-  return row;
-}
-
-function renderConnectionDiagnosticReport(report) {
-  const quality = classifyConnection(report.metrics);
-  const title = $('connection-report-summary');
-  title.dataset.state = quality;
-  title.textContent = t(connectionQualityTitleKey(quality));
-  $('connection-report-detail').textContent = t(connectionFindingKey(report.metrics));
-
-  const metrics = $('connection-report-metrics');
-  metrics.replaceChildren(
-    createConnectionMetric('connectionReportLatency', `${report.metrics.latencyMs} ${t('ms')}`),
-    createConnectionMetric('connectionReportJitter', `${report.metrics.jitterMs} ${t('ms')}`),
-    createConnectionMetric('connectionReportLoss', `${report.metrics.lossPercent}%`),
-    createConnectionMetric(
-      'connectionReportDownload',
-      report.downloadMbps === null ? '—' : `${Math.round(report.downloadMbps)} ${t('mbps')}`,
-    ),
-  );
-
-  const recommendations = $('connection-report-recommendations');
-  recommendations.replaceChildren();
-  if (!report.recommendations.length) {
-    recommendations.append(
-      createTextElement('div', 'connection-report-empty', t('connectionReportNoChanges')),
-    );
-  } else {
-    const recommendationCopy = {
-      warpyAuto: ['connectionReportAutoTitle', 'connectionReportAutoDescription'],
-      automaticMtu: ['connectionReportMtuTitle', 'connectionReportMtuDescription'],
-    };
-    report.recommendations.forEach(recommendation => {
-      const copy = recommendationCopy[recommendation];
-      const item = document.createElement('div');
-      item.className = 'connection-report-recommendation';
-      item.append(
-        createTextElement('span', 'connection-report-recommendation-mark', '✓'),
-        createTextElement('strong', 'connection-report-recommendation-title', t(copy[0])),
-        createTextElement('span', 'connection-report-recommendation-copy', t(copy[1])),
-      );
-      recommendations.append(item);
-    });
-  }
-
-  pendingConnectionRecommendations = [...report.recommendations];
-  $('connection-report-apply').classList.toggle('hidden', !report.recommendations.length);
-  $('connection-report-close').textContent = t(
-    report.recommendations.length ? 'cancel' : 'connectionReportDone',
-  );
-  show('overlay-connection-report');
-}
-
-async function applyConnectionRecommendations() {
-  if (!pendingConnectionRecommendations.length) {
-    hide('overlay-connection-report');
-    return;
-  }
-  if (pendingConnectionRecommendations.includes('warpyAuto')) {
-    $('s-warpy-auto').checked = true;
-    renderWarpyAutoStatus();
-  }
-  if (pendingConnectionRecommendations.includes('automaticMtu')) {
-    $('s-mtu').value = '0';
-  }
-  pendingConnectionRecommendations = [];
-  hide('overlay-connection-report');
-  const saved = await saveSettingsFromInputs();
-  if (saved) setConnectionCheckState('success', t('connectionCheckApplied'));
-}
-
-async function checkAndTuneConnection() {
-  if (connectionCheckRunning) return;
-  if (!S.profiles.length) {
-    setConnectionCheckState('error', t('connectionCheckNoProfiles'));
-    return;
-  }
-
-  connectionCheckRunning = true;
-  const button = $('btn-connection-check');
-  button.disabled = true;
-  setConnectionCheckState('checking', t('connectionCheckRunning'));
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 35_000);
-  try {
-    const snapshot = await getVpnRuntimeSnapshot();
-    if (snapshot.competingVpn) throw new Error(t('otherVpnActive'));
-    if (S.status !== 'connected') await startVpn();
-    if (S.status !== 'connected') throw new Error(t('failedToConnect'));
-
-    const metrics = await measureDiagnosticLatency(controller.signal);
-    setConnectionCheckState('checking', t('connectionCheckDownload'));
-    let downloadMbps = null;
-    try {
-      downloadMbps = await measureDiagnosticDownload(controller.signal);
-    } catch (error) {
-      if (controller.signal.aborted) throw error;
-      await logMsg(`Connection diagnostic download sample failed: ${error}`);
-    }
-
-    const quality = classifyConnection(metrics);
-    const recommendations = buildConnectionRecommendations({
-      metrics,
-      mtu: $('s-mtu').value,
-      warpyAuto: $('s-warpy-auto').checked,
-      profileCount: S.profiles.length,
-    });
-    renderConnectionDiagnosticReport({ metrics, downloadMbps, recommendations });
-    setConnectionCheckState(
-      quality === 'stable' ? 'success' : 'warning',
-      t('connectionCheckComplete'),
-    );
-  } catch (error) {
-    setConnectionCheckState('error', t('connectionCheckFailed'));
-    await logMsg(`Connection check failed: ${error}`);
-  } finally {
-    clearTimeout(timeout);
-    connectionCheckRunning = false;
-    button.disabled = false;
-  }
-}
-
 let confirmResolver = null;
 function showConfirm(messageKeyOrText, isKey = true) {
   return new Promise((resolve) => {
@@ -1986,7 +1543,7 @@ async function loadSettings() {
   try {
     const raw = await invoke('load_settings');
     const d = JSON.parse(raw);
-    let migrated = d.schemaVersion !== 7;
+    let migrated = d.schemaVersion !== 8;
     S.profiles = Array.isArray(d.profiles)
       ? d.profiles.filter(profile => profile && typeof profile === 'object').map(profile => {
         const clean = { ...profile };
@@ -2026,10 +1583,7 @@ async function loadSettings() {
     S.lan = d.lan === true;
     S.killSwitch = d.killSwitch === true;
     S.resumeOnBoot = d.resumeOnBoot === true;
-    S.networkAutoProtect = false;
-    if (d.networkAutoProtect === true) migrated = true;
-    S.warpyAuto = false;
-    if (d.warpyAuto === true) migrated = true;
+    if ('networkAutoProtect' in d || 'warpyAuto' in d || 'updateChannel' in d) migrated = true;
     S.mtu = normalizeMtu(d.mtu);
     S.appsMode = normalizeChoice(d.appsMode, ['off', 'only', 'bypass'], 'off');
     S.appsList = stringList(d.appsList);
@@ -2043,8 +1597,6 @@ async function loadSettings() {
 
     S.lang = normalizeChoice(d.lang, ['ru', 'en'], systemLanguage());
     if (d.lang !== S.lang) migrated = true;
-    S.updateChannel = 'stable';
-    if (d.updateChannel && d.updateChannel !== 'stable') migrated = true;
     S.settingsLoaded = true;
 
     loadSettingsInputs();
@@ -2106,61 +1658,6 @@ async function refreshKillSwitchStatus() {
   renderKillSwitchStatus();
 }
 
-function profileIndexForOutbound(outbound) {
-  const match = /^profile-(\d+)$/.exec(String(outbound || ''));
-  if (!match) return -1;
-  const runtimeIndex = Number.parseInt(match[1], 10) - 1;
-  const profileKey = S.runtimeProfileKeys[runtimeIndex];
-  if (!profileKey) return -1;
-  return S.profiles.findIndex(profile => profileRuntimeKey(profile) === profileKey);
-}
-
-function renderWarpyAutoStatus() {
-  const element = $('warpy-auto-status');
-  if (!element) return;
-  const settingsOpen = !$('overlay-settings').classList.contains('hidden');
-  const enabled = settingsOpen ? $('s-warpy-auto').checked : S.warpyAuto;
-  const pendingChange = settingsOpen && enabled !== S.warpyAuto;
-  if (!enabled) {
-    element.textContent = t('warpyAutoOff');
-    element.dataset.state = 'off';
-    return;
-  }
-
-  const event = pendingChange ? null : S.vpnHealth?.lastAutoSwitch;
-  if (!event) {
-    const runtimePreferred = profileIndexForOutbound(S.vpnHealth?.preferredOutbound);
-    const preferredIndex = runtimePreferred >= 0 ? runtimePreferred : preferredProfileIndex();
-    const profile = preferredIndex >= 0 ? S.profiles[preferredIndex] : null;
-    const name = profile ? getProfileDisplay(profile).name : '';
-    element.textContent = name
-      ? `${t('warpyAutoPreferred')} · ${name}`
-      : t('warpyAutoWatching');
-    element.dataset.state = 'armed';
-    return;
-  }
-  if (event.outcome !== 'switched') {
-    element.textContent = t('warpyAutoFailed');
-    element.dataset.state = 'error';
-    return;
-  }
-
-  const index = profileIndexForOutbound(event.toOutbound);
-  const profile = index >= 0 ? S.profiles[index] : null;
-  const profileName = profile ? getProfileDisplay(profile).name : '';
-  const key = warpyAutoEventTranslationKey(event.reason);
-  element.textContent = profileName ? `${t(key)} · ${profileName}` : t(key);
-  element.dataset.state = 'armed';
-}
-
-function updateNetworkContext(value) {
-  S.networkContext = normalizeNetworkContext(value);
-  if (!S.networkContext.internet || S.networkContext.trust === 'trusted') {
-    S.networkAutoBlocked = false;
-    S.networkAutoBlockedReason = '';
-  }
-}
-
 async function getVpnRuntimeSnapshot() {
   const snapshot = await invoke('get_vpn_runtime_snapshot');
   if (!snapshot || typeof snapshot !== 'object') {
@@ -2169,7 +1666,6 @@ async function getVpnRuntimeSnapshot() {
   return {
     status: String(snapshot.status || 'Error'),
     desiredRunning: snapshot.desiredRunning === true,
-    network: normalizeNetworkContext(snapshot.network),
     competingVpn: snapshot.competingVpn === true,
   };
 }
@@ -2204,54 +1700,6 @@ async function applyServiceConnectionSnapshot(
   return next;
 }
 
-async function refreshNetworkContextDisplay() {
-  try {
-    const snapshot = await getVpnRuntimeSnapshot();
-    updateNetworkContext(snapshot.network);
-  } catch (error) {
-    console.error('Network context refresh failed:', error);
-  }
-}
-
-async function applyNetworkAutoProtection(snapshot) {
-  updateNetworkContext(snapshot.network);
-  const decision = networkProtectionDecision({
-    enabled: S.networkAutoProtect,
-    network: S.networkContext,
-    backendStatus: snapshot.status,
-    hasProfiles: S.profiles.length > 0,
-    busy: S.networkAutoConnectRunning
-      || S.startCommandAttempt !== 0
-      || S.status === 'connected'
-      || S.status === 'connecting',
-    blocked: S.networkAutoBlocked,
-    handledGeneration: S.networkAutoHandledGeneration,
-  });
-  if (decision.action !== 'connect') return false;
-
-  S.networkAutoHandledGeneration = decision.context.generation;
-  S.networkAutoConnectRunning = true;
-  try {
-    await logMsg('Public network auto-protection started');
-    await startVpn();
-    if (S.status !== 'connected') {
-      S.networkAutoBlocked = true;
-      S.networkAutoBlockedReason = 'failed';
-    }
-  } finally {
-    S.networkAutoConnectRunning = false;
-  }
-  return true;
-}
-
-function warpyAutoEventTranslationKey(reason) {
-  return reason === 'unavailable'
-    ? 'warpyAutoUnavailable'
-    : reason === 'preferred'
-      ? 'warpyAutoReturned'
-      : 'warpyAutoFaster';
-}
-
 async function initializeSystemNotifications(allowPrompt) {
   const notification = window.__TAURI__?.notification;
   if (typeof notification?.isPermissionGranted !== 'function') return;
@@ -2279,49 +1727,10 @@ function sendSignificantNotification(key, title, body, eventAt = Date.now()) {
   }
 }
 
-async function refreshVpnHealth() {
-  if (S.healthCheckRunning) return;
-  S.healthCheckRunning = true;
-  try {
-    const snapshot = await invoke('get_vpn_health');
-    S.vpnHealth = snapshot && typeof snapshot === 'object' ? snapshot : null;
-    const event = S.vpnHealth?.lastAutoSwitch;
-    const notificationEvent = autoSwitchNotificationEvent(event, S.lastHandledAutoSwitchAt);
-    if (notificationEvent) {
-      if (
-        notificationEvent.kind === 'auto-switched'
-        && event.toOutbound === S.vpnHealth?.activeOutbound
-      ) {
-        const index = profileIndexForOutbound(event.toOutbound);
-        if (index >= 0 && index !== S.active) {
-          S.active = index;
-          syncUI();
-          if (!$('overlay-profiles').classList.contains('hidden')) renderProfiles();
-        }
-        const messageKey = warpyAutoEventTranslationKey(event.reason);
-        sendSignificantNotification('auto-switched', t('warpyAuto'), t(messageKey), notificationEvent.observedAt);
-      } else if (notificationEvent.kind === 'auto-failed') {
-        sendSignificantNotification('auto-failed', t('warpyAuto'), t('warpyAutoFailed'), notificationEvent.observedAt);
-      }
-      S.lastHandledAutoSwitchAt = notificationEvent.observedAt;
-    }
-    renderWarpyAutoStatus();
-  } catch (error) {
-    console.error('VPN health check failed:', error);
-  } finally {
-    S.healthCheckRunning = false;
-  }
-}
-
 async function updateResumeOnBootPolicy() {
   await invoke('set_resume_on_boot', {
     enabled: S.resumeOnBoot,
   });
-}
-
-async function updateWarpyAutoPolicy() {
-  await invoke('set_warpy_auto', { enabled: S.warpyAuto });
-  renderWarpyAutoStatus();
 }
 
 async function save() {
@@ -2332,7 +1741,7 @@ async function save() {
     return clean;
   });
   await invoke('save_settings', { settings: JSON.stringify({
-    schemaVersion: 7,
+    schemaVersion: 8,
     profiles,
     subscriptions: S.subscriptions.map(subscription => ({
       id: subscription.id,
@@ -2349,15 +1758,12 @@ async function save() {
     lan: S.lan,
     killSwitch: S.killSwitch,
     resumeOnBoot: S.resumeOnBoot,
-    networkAutoProtect: S.networkAutoProtect,
-    warpyAuto: S.warpyAuto,
     mtu: S.mtu,
     appsMode: S.appsMode,
     appsList: S.appsList,
     sitesMode: S.sitesMode,
     sitesList: S.sitesList,
     lang: S.lang,
-    updateChannel: S.updateChannel,
   }) });
 }
 
@@ -2619,7 +2025,9 @@ async function commitProfileState(snapshot, nextState, operationName, { restartR
   const shouldRestartRuntime = wasRunning && restartRuntime;
   let originalError = null;
   try {
-    if (shouldRestartRuntime) await stopVpn();
+    if (shouldRestartRuntime && !await stopVpn()) {
+      throw new Error(t('failedToDisconnect'));
+    }
     S.profiles = nextState.profiles;
     S.subscriptions = nextState.subscriptions;
     S.active = nextState.active;
@@ -2666,6 +2074,24 @@ async function commitProfileState(snapshot, nextState, operationName, { restartR
     throw new Error(`${originalError}; ${t('settingsSaveError')}${rollbackError}`);
   }
   throw originalError;
+}
+
+async function forgetRuntimeOutbounds(outbounds, operationName) {
+  if (!outbounds.length || !['connected', 'connecting'].includes(S.status)) return;
+  try {
+    for (const outbound of outbounds) {
+      await invoke('forget_vpn_outbound', { outbound });
+    }
+  } catch (error) {
+    await logMsg(`${operationName} runtime cleanup failed, rebuilding tunnel: ${error}`);
+    if (!await stopVpn()) throw new Error(t('failedToDisconnect'));
+    if (S.profiles.length) {
+      await startVpn({ preserveActiveProfile: true });
+      if (S.status !== 'connected') {
+        throw new Error(errorMsg.textContent || t('failedToConnect'));
+      }
+    }
+  }
 }
 
 async function applySubscriptionUpdate(subscription, importedProfiles, legacyGroupName = '') {
@@ -2768,7 +2194,10 @@ async function importProfileText(text) {
     showMessage('invalidFormat');
     return;
   }
-  const duplicateIndex = S.profiles.findIndex(profile => profile.raw === p.raw);
+  const importedProfileKey = subscriptionProfileKey(p);
+  const duplicateIndex = S.profiles.findIndex(
+    profile => subscriptionProfileKey(profile) === importedProfileKey,
+  );
   if (duplicateIndex >= 0) {
     if (!await selectProfile(duplicateIndex, { closeProfiles: false })) return;
     hide('overlay-add');
@@ -3037,7 +2466,6 @@ async function selectProfile(index, { closeProfiles = true } = {}) {
   const previousPreferredProfileKey = S.preferredProfileKey;
   const wasActive = S.status === 'connected' || S.status === 'connecting';
   const previousRuntimeIndex = S.runtimeProfileKeys.indexOf(profileRuntimeKey(S.profiles[previousActive]));
-  const previousPreferredRuntimeIndex = S.runtimeProfileKeys.indexOf(previousPreferredProfileKey);
   const nextRuntimeIndex = S.runtimeProfileKeys.indexOf(profileRuntimeKey(S.profiles[index]));
   let switchedInPlace = false;
   let stoppedForRestart = false;
@@ -3069,25 +2497,17 @@ async function selectProfile(index, { closeProfiles = true } = {}) {
         await logMsg(`Profile switch rollback failed: ${rollbackError}`);
       }
     }
-    if (switchedInPlace && previousPreferredRuntimeIndex >= 0) {
-      try {
-        await invoke('set_preferred_outbound', {
-          outbound: `profile-${previousPreferredRuntimeIndex + 1}`,
-        });
-      } catch (rollbackError) {
-        await logMsg(`Preferred profile rollback failed: ${rollbackError}`);
-      }
-    }
     syncUI();
     showMessage(t('settingsSaveError') + error, false);
-    if (stoppedForRestart) await startVpn();
+    if (stoppedForRestart && !await startVpn()) {
+      await logMsg('Failed to restore the previous profile after a settings save error');
+    }
     return false;
   }
 
-  if (switchedInPlace) await refreshVpnHealth();
   syncUI();
   if (closeProfiles) hide('overlay-profiles');
-  if (stoppedForRestart) await startVpn();
+  if (stoppedForRestart && !await startVpn()) return false;
   return true;
 }
 
@@ -3149,11 +2569,11 @@ function createProfileItemEl(p, i) {
     if (e.target.classList.contains('p-share') || e.target.closest('.p-share')) {
       const idx = parseInt(e.target.closest('.p-share').dataset.i);
       const profile = S.profiles[idx];
-      if (!profile?.raw) {
+      try {
+        showShareValue(profileShareLink(profile));
+      } catch {
         showMessage('invalidFormat');
-        return;
       }
-      showShareValue(profile.raw);
       return;
     }
     if (e.target.classList.contains('p-del') || e.target.closest('.p-del')) {
@@ -3180,13 +2600,10 @@ function createProfileItemEl(p, i) {
             preferredProfileKey: nextPreferredProfileKey,
           }, 'Profile delete', { restartRuntime: deletingActive });
           if (!deletingActive && deletedRuntimeIndex >= 0) {
-            try {
-              await invoke('forget_vpn_outbound', {
-                outbound: `profile-${deletedRuntimeIndex + 1}`,
-              });
-            } catch (error) {
-              await logMsg(`Profile runtime cleanup deferred: ${error}`);
-            }
+            await forgetRuntimeOutbounds(
+              [`profile-${deletedRuntimeIndex + 1}`],
+              'Profile delete',
+            );
           }
         } catch (error) {
           showMessage(t('settingsSaveError') + error, false);
@@ -3365,13 +2782,10 @@ async function deleteProfileGroup(groupName, groupItems, subscription) {
       preferredProfileKey: nextPreferred >= 0 ? profileRuntimeKey(nextProfiles[nextPreferred]) : '',
     }, 'Profile group delete', { restartRuntime: deletingActive });
     if (!deletingActive) {
-      for (const runtimeIndex of deletedRuntimeIndexes) {
-        try {
-          await invoke('forget_vpn_outbound', { outbound: `profile-${runtimeIndex + 1}` });
-        } catch (error) {
-          await logMsg(`Profile group runtime cleanup deferred: ${error}`);
-        }
-      }
+      await forgetRuntimeOutbounds(
+        deletedRuntimeIndexes.map(runtimeIndex => `profile-${runtimeIndex + 1}`),
+        'Profile group delete',
+      );
     }
   } catch (error) {
     showMessage(t('settingsSaveError') + String(error).replace(/^Error:\s*/, ''), false);
@@ -3394,7 +2808,7 @@ function currentVpnSettings() {
 
 function profileRuntimeKey(profile) {
   if (!profile) return '';
-  return profile.raw || [profile.protocol, profile.host, profile.port, profile.uuid].join('\u0000');
+  return subscriptionProfileKey(profile);
 }
 
 function preferredProfileIndex() {
@@ -3419,7 +2833,6 @@ function makeConfig() {
     S.profiles,
     S.active,
     settings,
-    S.warpyAuto,
   );
 
   return {
@@ -3432,10 +2845,8 @@ function makeConfig() {
 async function toggleVpn() {
   if (!S.profiles.length) { show('overlay-add'); return; }
   if (S.status === 'connected' || S.status === 'connecting' || S.status === 'error') {
-    await stopVpn({ manual: true });
+    await stopVpn();
   } else {
-    S.networkAutoBlocked = false;
-    S.networkAutoBlockedReason = '';
     await startVpn();
   }
 }
@@ -3483,27 +2894,26 @@ async function startVpn({ reportFailure = true, preserveActiveProfile = false } 
     await invoke('start_vpn', {
       config: runtime.config,
       killSwitch: S.killSwitch,
-      autoMode: S.warpyAuto,
     });
-    if (attempt !== S.connectAttempt) return;
+    if (attempt !== S.connectAttempt) return false;
     const serviceSnapshot = await getVpnRuntimeSnapshot();
     if (!serviceSnapshot.status.startsWith('Connected')) {
       throw new Error(`${t('failedToConnect')} (${serviceSnapshot.status})`);
     }
 
-    if (attempt !== S.connectAttempt) return;
+    if (attempt !== S.connectAttempt) return false;
     S.runtimeProfileKeys = runtime.profileKeys;
     S.commandPending = null;
     await applyServiceConnectionSnapshot(serviceSnapshot, { showConnectedAlert: true });
-    await refreshVpnHealth();
     setTimeout(() => {
       if (attempt === S.connectAttempt && S.status === 'connected') {
         S.showConnectedAlert = false;
         syncUI();
       }
     }, 1250);
+    return true;
   } catch(e) {
-    if (attempt !== S.connectAttempt) return;
+    if (attempt !== S.connectAttempt) return false;
     let cleanupError = '';
     try {
       await invoke('stop_vpn');
@@ -3520,6 +2930,7 @@ async function startVpn({ reportFailure = true, preserveActiveProfile = false } 
       ? `${message || t('trafficCheckFailed')}${cleanupError}`
       : '';
     syncUI();
+    return false;
   } finally {
     if (S.startCommandAttempt === attempt) S.startCommandAttempt = 0;
     if (S.commandPending === 'start') S.commandPending = null;
@@ -3527,11 +2938,7 @@ async function startVpn({ reportFailure = true, preserveActiveProfile = false } 
   }
 }
 
-async function stopVpn({ manual = false } = {}) {
-  if (manual && S.networkAutoProtect) {
-    S.networkAutoBlocked = true;
-    S.networkAutoBlockedReason = 'manual';
-  }
+async function stopVpn() {
   ++S.connectAttempt;
   S.startCommandAttempt = 0;
   S.commandPending = 'stop';
@@ -3563,7 +2970,7 @@ async function stopVpn({ manual = false } = {}) {
 async function checkStatus() {
   const activeStatus = ['connected', 'connecting', 'error'].includes(S.status);
   if (
-    (!activeStatus && !S.networkAutoProtect) ||
+    !activeStatus ||
     S.statusCheckRunning ||
     S.startCommandAttempt !== 0
   ) return;
@@ -3572,8 +2979,6 @@ async function checkStatus() {
     const snapshot = await getVpnRuntimeSnapshot();
     S.statusCheckFailures = 0;
     const st = snapshot.status;
-    const autoProtectionStarted = await applyNetworkAutoProtection(snapshot);
-    if (autoProtectionStarted || S.status === 'stopped') return;
     const notificationTransition = connectivityNotificationTransition(
       S.status,
       st,
@@ -3582,7 +2987,6 @@ async function checkStatus() {
     if (st.startsWith('Connected')) {
       S.commandError = '';
       await applyServiceConnectionSnapshot(snapshot);
-      await refreshVpnHealth();
     } else if (isTransientServiceStatus(st)) {
       await applyServiceConnectionSnapshot(snapshot);
     } else {
@@ -3679,7 +3083,6 @@ async function restoreBackendState() {
     } catch (error) {
       await logMsg(`Runtime profile mapping failed: ${error}`);
     }
-    await refreshVpnHealth();
   } catch (error) {
     S.commandError = t('serviceUnavailable');
     await logMsg(`Backend state restore failed: ${error}`);

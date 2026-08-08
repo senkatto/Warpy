@@ -66,12 +66,6 @@ internal sealed interface VpnSessionEvent {
         val message: String,
         val stop: Boolean,
     ) : VpnSessionEvent
-    data class PreferredRetryDue(val generation: Long) : VpnSessionEvent
-    data class PreferredRetrySucceeded(
-        val generation: Long,
-        val runtimeProfileTag: String,
-    ) : VpnSessionEvent
-    data class PreferredRetryRolledBack(val generation: Long) : VpnSessionEvent
     data class StopCompleted(val generation: Long) : VpnSessionEvent
     data object ScreenLocked : VpnSessionEvent
     data object ScreenUnlocked : VpnSessionEvent
@@ -108,12 +102,6 @@ internal sealed interface VpnSessionEffect {
     data class RecoverConnection(
         val generation: Long,
         val request: RecoveryRequest,
-    ) : VpnSessionEffect
-    data class SchedulePreferredRetry(val generation: Long) : VpnSessionEffect
-    data class RetryPreferredOutbound(
-        val generation: Long,
-        val preferredProfileTag: String,
-        val runtimeProfileTag: String,
     ) : VpnSessionEffect
 }
 
@@ -251,46 +239,6 @@ internal class VpnSessionReducer(
                     lastError = event.message,
                 ),
                 listOf(VpnSessionEffect.StopCore(event.generation)),
-            )
-        }
-        is VpnSessionEvent.PreferredRetryDue -> current(snapshot, event.generation) {
-            val preferred = snapshot.preferredProfileTag
-            val runtime = snapshot.runtimeProfileTag
-            if (!snapshot.shouldRun ||
-                snapshot.state != VpnState.Connected ||
-                preferred == null ||
-                runtime == null ||
-                preferred == runtime
-            ) {
-                return@current VpnSessionReduction(snapshot)
-            }
-            VpnSessionReduction(
-                snapshot,
-                listOf(
-                    VpnSessionEffect.RetryPreferredOutbound(
-                        generation = event.generation,
-                        preferredProfileTag = preferred,
-                        runtimeProfileTag = runtime,
-                    ),
-                ),
-            )
-        }
-        is VpnSessionEvent.PreferredRetrySucceeded -> current(snapshot, event.generation) {
-            if (!snapshot.shouldRun) return@current VpnSessionReduction(snapshot)
-            connected(
-                snapshot = snapshot,
-                runtimeProfileTag = event.runtimeProfileTag,
-            )
-        }
-        is VpnSessionEvent.PreferredRetryRolledBack -> current(snapshot, event.generation) {
-            val preferred = snapshot.preferredProfileTag
-            val runtime = snapshot.runtimeProfileTag
-            if (!snapshot.shouldRun || preferred == null || runtime == null || preferred == runtime) {
-                return@current VpnSessionReduction(snapshot)
-            }
-            VpnSessionReduction(
-                snapshot.copy(state = VpnState.Connected, lastError = null),
-                listOf(VpnSessionEffect.SchedulePreferredRetry(event.generation)),
             )
         }
         is VpnSessionEvent.StopCompleted -> current(snapshot, event.generation) {
@@ -567,15 +515,7 @@ internal class VpnSessionReducer(
                 ?: clock.nowMillis(),
             lastError = null,
         )
-        val preferred = connected.preferredProfileTag
-        return VpnSessionReduction(
-            snapshot = connected,
-            effects = if (preferred != null && preferred != runtimeProfileTag) {
-                listOf(VpnSessionEffect.SchedulePreferredRetry(connected.generation))
-            } else {
-                emptyList()
-            },
-        )
+        return VpnSessionReduction(snapshot = connected)
     }
 
     private fun restore(

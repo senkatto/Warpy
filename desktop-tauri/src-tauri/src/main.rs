@@ -9,8 +9,6 @@ mod tray_menu;
 mod updates;
 mod vpn_engine;
 #[cfg(windows)]
-mod vpn_health;
-#[cfg(windows)]
 mod vpn_ipc;
 #[cfg(windows)]
 mod vpn_kill_switch;
@@ -48,6 +46,32 @@ use sysinfo::{ProcessExt, System, SystemExt};
 use tauri::{Emitter, Manager, State};
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+const MAX_VPN_CONFIG_BYTES: usize = 768 * 1024;
+const MAX_SETTINGS_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PROTECTED_SETTINGS_BYTES: usize = MAX_SETTINGS_BYTES + 64 * 1024;
+const MAX_LOG_MESSAGE_CHARS: usize = 2_048;
+
+fn ensure_text_size(value: &str, max_bytes: usize, label: &str) -> Result<(), String> {
+    if value.len() > max_bytes {
+        return Err(format!("{label} exceeds the allowed size"));
+    }
+    Ok(())
+}
+
+fn validate_runtime_outbound(outbound: &str) -> Result<(), String> {
+    if outbound.len() > 32 {
+        return Err("Invalid runtime profile identifier".to_string());
+    }
+    let index = outbound
+        .strip_prefix("profile-")
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .filter(|value| outbound == format!("profile-{value}"));
+    if index.is_none() {
+        return Err("Invalid runtime profile identifier".to_string());
+    }
+    Ok(())
+}
 
 struct AppState {
     settings_io: Mutex<()>,
@@ -145,8 +169,15 @@ fn unprotect_for_current_user(contents: &[u8]) -> Result<Vec<u8>, String> {
 
 #[cfg(windows)]
 fn read_protected_settings(path: &Path) -> Result<String, String> {
+    let size = fs::metadata(path).map_err(|error| error.to_string())?.len() as usize;
+    if size > MAX_PROTECTED_SETTINGS_BYTES {
+        return Err("Protected settings file is too large".to_string());
+    }
     let protected = fs::read(path).map_err(|error| error.to_string())?;
     let plain = unprotect_for_current_user(&protected)?;
+    if plain.len() > MAX_SETTINGS_BYTES {
+        return Err("Settings file is too large".to_string());
+    }
     let settings = String::from_utf8(plain).map_err(|error| error.to_string())?;
     serde_json::from_str::<serde_json::Value>(&settings)
         .map_err(|error| format!("Некорректные настройки: {error}"))?;
@@ -221,26 +252,6 @@ async fn get_vpn_network_stats() -> Result<VpnNetworkStats, String> {
 }
 
 #[tauri::command]
-async fn get_vpn_health() -> Result<serde_json::Value, String> {
-    #[cfg(windows)]
-    {
-        service_call_async(vpn_ipc::VpnRequest::Health).await
-    }
-
-    #[cfg(not(windows))]
-    Ok(serde_json::json!({
-        "networkType": "other",
-        "activeOutbound": null,
-        "generatedAtMs": 0,
-        "profiles": [],
-        "recommendation": null,
-        "autoEnabled": false,
-        "preferredOutbound": null,
-        "lastAutoSwitch": null,
-    }))
-}
-
-#[tauri::command]
 async fn get_kill_switch_status() -> String {
     #[cfg(windows)]
     {
@@ -270,13 +281,13 @@ async fn stop_vpn() -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn start_vpn(config: String, kill_switch: bool, auto_mode: bool) -> Result<(), String> {
+async fn start_vpn(config: String, kill_switch: bool) -> Result<(), String> {
+    ensure_text_size(&config, MAX_VPN_CONFIG_BYTES, "VPN configuration")?;
     #[cfg(windows)]
     {
         service_call_async(vpn_ipc::VpnRequest::Start {
             config,
             kill_switch,
-            auto_mode,
         })
         .await
         .map(|_| ())
@@ -287,33 +298,8 @@ async fn start_vpn(config: String, kill_switch: bool, auto_mode: bool) -> Result
 }
 
 #[tauri::command]
-async fn set_warpy_auto(enabled: bool) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        service_call_async(vpn_ipc::VpnRequest::SetAutoMode { enabled })
-            .await
-            .map(|_| ())
-    }
-
-    #[cfg(not(windows))]
-    Ok(())
-}
-
-#[tauri::command]
-async fn set_preferred_outbound(outbound: String) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        service_call_async(vpn_ipc::VpnRequest::SetPreferredOutbound { outbound })
-            .await
-            .map(|_| ())
-    }
-
-    #[cfg(not(windows))]
-    Ok(())
-}
-
-#[tauri::command]
 async fn forget_vpn_outbound(outbound: String) -> Result<(), String> {
+    validate_runtime_outbound(&outbound)?;
     #[cfg(windows)]
     {
         service_call_async(vpn_ipc::VpnRequest::ForgetOutbound { outbound })
@@ -327,6 +313,7 @@ async fn forget_vpn_outbound(outbound: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn switch_vpn_outbound(outbound: String) -> Result<(), String> {
+    validate_runtime_outbound(&outbound)?;
     #[cfg(windows)]
     {
         service_call_async(vpn_ipc::VpnRequest::SwitchOutbound { outbound })
@@ -501,6 +488,12 @@ fn load_settings(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<St
 
         let legacy_path = app_dir.join("settings.json");
         if legacy_path.exists() {
+            let size = fs::metadata(&legacy_path)
+                .map_err(|error| error.to_string())?
+                .len() as usize;
+            if size > MAX_SETTINGS_BYTES {
+                return Err("Settings file is too large".to_string());
+            }
             let plain = fs::read(&legacy_path).map_err(|error| error.to_string())?;
             serde_json::from_slice::<serde_json::Value>(&plain)
                 .map_err(|error| format!("Некорректные настройки: {error}"))?;
@@ -533,6 +526,7 @@ fn save_settings(
         .settings_io
         .lock()
         .map_err(|_| "Хранилище настроек недоступно".to_string())?;
+    ensure_text_size(&settings, MAX_SETTINGS_BYTES, "Settings")?;
     serde_json::from_str::<serde_json::Value>(&settings)
         .map_err(|error| format!("Некорректные настройки: {error}"))?;
     let app_dir = app_data_dir(&app)?;
@@ -628,7 +622,11 @@ fn log_message(app: tauri::AppHandle, message: String) {
     let log_path = app_dir.join("app.log");
     let _ = rotate_log(&log_path);
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_path) {
-        let single_line = message.replace(['\r', '\n'], " ");
+        let single_line: String = message
+            .replace(['\r', '\n'], " ")
+            .chars()
+            .take(MAX_LOG_MESSAGE_CHARS)
+            .collect();
         let _ = writeln!(file, "{single_line}");
     }
 }
@@ -753,11 +751,8 @@ fn run_app(
             get_vpn_runtime_snapshot,
             get_vpn_started_at,
             get_vpn_network_stats,
-            get_vpn_health,
             get_kill_switch_status,
             start_vpn,
-            set_warpy_auto,
-            set_preferred_outbound,
             forget_vpn_outbound,
             switch_vpn_outbound,
             stop_vpn,
@@ -874,7 +869,10 @@ fn run_app(
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::{protect_for_current_user, unprotect_for_current_user};
+    use super::{
+        ensure_text_size, protect_for_current_user, unprotect_for_current_user,
+        validate_runtime_outbound,
+    };
 
     #[test]
     fn dpapi_round_trip() {
@@ -885,5 +883,20 @@ mod tests {
             unprotect_for_current_user(&protected).expect("unprotect settings"),
             source
         );
+    }
+
+    #[test]
+    fn runtime_outbound_accepts_only_canonical_profile_ids() {
+        assert!(validate_runtime_outbound("profile-1").is_ok());
+        assert!(validate_runtime_outbound("profile-999").is_ok());
+        for invalid in ["", "profile-0", "profile-01", "profile-x", "../profile-1"] {
+            assert!(validate_runtime_outbound(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn text_size_limit_accepts_exact_boundary() {
+        assert!(ensure_text_size("1234", 4, "test").is_ok());
+        assert!(ensure_text_size("12345", 4, "test").is_err());
     }
 }

@@ -10,39 +10,12 @@ const RELEASES_API: &str = "https://api.github.com/repos/senkatto/Warpy/releases
 const RELEASE_DOWNLOAD_PREFIX: &str = "/senkatto/Warpy/releases/download/";
 const UPDATE_PROGRESS_EVENT: &str = "warpy://update-progress";
 const LAUNCH_HEALTH_MARKER_PREFIX: &str = "launch-health-";
+const ROLLBACK_MARKER: &str = "[warpy-rollback:stable]";
+const MAX_RELEASE_FEED_BYTES: usize = 2 * 1024 * 1024;
+const MAX_EXPECTED_VERSION_CHARS: usize = 64;
 
 fn ensure_crypto_provider() {
     let _ = rustls::crypto::ring::default_provider().install_default();
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UpdateChannel {
-    Stable,
-    Beta,
-}
-
-impl UpdateChannel {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "stable" => Ok(Self::Stable),
-            "beta" => Ok(Self::Beta),
-            _ => Err("unsupported update channel".to_string()),
-        }
-    }
-
-    fn accepts(self, prerelease: bool) -> bool {
-        match self {
-            Self::Stable => !prerelease,
-            Self::Beta => true,
-        }
-    }
-
-    fn rollback_marker(self) -> &'static str {
-        match self {
-            Self::Stable => "[warpy-rollback:stable]",
-            Self::Beta => "[warpy-rollback:beta]",
-        }
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -93,26 +66,22 @@ fn is_trusted_feed_url(url: &Url) -> bool {
         && url.path().starts_with(RELEASE_DOWNLOAD_PREFIX)
 }
 
-fn select_release(
-    releases: &[GitHubRelease],
-    channel: UpdateChannel,
-) -> Result<Option<ReleaseTarget>, String> {
+fn select_release(releases: &[GitHubRelease]) -> Result<Option<ReleaseTarget>, String> {
     let mut rollback_targets = Vec::new();
     let mut normal_targets = Vec::new();
 
     for release in releases {
-        if release.draft || !channel.accepts(release.prerelease) {
+        if release.draft || release.prerelease {
             continue;
         }
         let Some(version) = release_version(&release.tag_name) else {
             continue;
         };
-        let feed_name = if release.prerelease {
-            "latest-beta.json"
-        } else {
-            "latest.json"
-        };
-        let Some(asset) = release.assets.iter().find(|asset| asset.name == feed_name) else {
+        let Some(asset) = release
+            .assets
+            .iter()
+            .find(|asset| asset.name == "latest.json")
+        else {
             continue;
         };
         if !is_trusted_feed_url(&asset.browser_download_url) {
@@ -125,7 +94,7 @@ fn select_release(
             rollback: release
                 .body
                 .as_deref()
-                .is_some_and(|body| body.contains(channel.rollback_marker())),
+                .is_some_and(|body| body.contains(ROLLBACK_MARKER)),
         };
         if target.rollback {
             rollback_targets.push(target);
@@ -145,9 +114,9 @@ fn select_release(
     Ok(normal_targets.into_iter().next())
 }
 
-async fn discover_release(channel: UpdateChannel) -> Result<Option<ReleaseTarget>, String> {
+async fn discover_release() -> Result<Option<ReleaseTarget>, String> {
     ensure_crypto_provider();
-    let response = reqwest::Client::builder()
+    let mut response = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|error| error.to_string())?
@@ -161,11 +130,22 @@ async fn discover_release(channel: UpdateChannel) -> Result<Option<ReleaseTarget
     if !response.status().is_success() {
         return Err(format!("release discovery returned {}", response.status()));
     }
-    let releases = response
-        .json::<Vec<GitHubRelease>>()
-        .await
-        .map_err(|error| error.to_string())?;
-    select_release(&releases, channel)
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RELEASE_FEED_BYTES as u64)
+    {
+        return Err("release feed is too large".to_string());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        if body.len().saturating_add(chunk.len()) > MAX_RELEASE_FEED_BYTES {
+            return Err("release feed is too large".to_string());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let releases =
+        serde_json::from_slice::<Vec<GitHubRelease>>(&body).map_err(|error| error.to_string())?;
+    select_release(&releases)
 }
 
 fn build_updater(
@@ -229,10 +209,9 @@ pub fn confirm_launch_health(app: &AppHandle) -> Result<(), String> {
 
 async fn checked_update(
     app: &AppHandle,
-    channel: UpdateChannel,
     timeout: Duration,
 ) -> Result<Option<(Update, ReleaseTarget)>, String> {
-    let Some(target) = discover_release(channel).await? else {
+    let Some(target) = discover_release().await? else {
         return Ok(None);
     };
     let current = app.package_info().version.clone();
@@ -250,13 +229,8 @@ async fn checked_update(
 }
 
 #[tauri::command]
-pub async fn check_for_update(
-    app: AppHandle,
-    channel: String,
-) -> Result<Option<UpdateInfo>, String> {
-    let channel = UpdateChannel::parse(&channel)?;
-    let Some((update, target)) = checked_update(&app, channel, Duration::from_secs(20)).await?
-    else {
+pub async fn check_for_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let Some((update, target)) = checked_update(&app, Duration::from_secs(20)).await? else {
         return Ok(None);
     };
     Ok(Some(UpdateInfo {
@@ -267,15 +241,12 @@ pub async fn check_for_update(
 }
 
 #[tauri::command]
-pub async fn install_update(
-    app: AppHandle,
-    channel: String,
-    expected_version: String,
-) -> Result<(), String> {
-    let channel = UpdateChannel::parse(&channel)?;
+pub async fn install_update(app: AppHandle, expected_version: String) -> Result<(), String> {
+    if expected_version.chars().count() > MAX_EXPECTED_VERSION_CHARS {
+        return Err("invalid expected version".to_string());
+    }
     let expected_version = Version::parse(&expected_version).map_err(|error| error.to_string())?;
-    let Some((update, target)) = checked_update(&app, channel, Duration::from_secs(180)).await?
-    else {
+    let Some((update, target)) = checked_update(&app, Duration::from_secs(180)).await? else {
         return Err("update is no longer available".to_string());
     };
     if target.version != expected_version || update.version != expected_version.to_string() {
@@ -322,7 +293,7 @@ pub async fn install_update(
 mod tests {
     use super::{
         ensure_crypto_provider, launch_health_marker_path, select_release,
-        write_launch_health_marker, GitHubRelease, UpdateChannel,
+        write_launch_health_marker, GitHubRelease,
     };
     use semver::Version;
 
@@ -337,28 +308,20 @@ mod tests {
     }
 
     #[test]
-    fn stable_and_beta_channels_choose_expected_semver() {
+    fn stable_release_ignores_prereleases() {
         let fixture = releases(
             r#"[
               {"tag_name":"v1.2.0","draft":false,"prerelease":false,"body":"","assets":[{"name":"latest.json","browser_download_url":"https://github.com/senkatto/Warpy/releases/download/v1.2.0/latest.json"}]},
-              {"tag_name":"v1.3.0-beta.2","draft":false,"prerelease":true,"body":"","assets":[{"name":"latest-beta.json","browser_download_url":"https://github.com/senkatto/Warpy/releases/download/v1.3.0-beta.2/latest-beta.json"}]}
+              {"tag_name":"v1.3.0-beta.2","draft":false,"prerelease":true,"body":"","assets":[{"name":"latest.json","browser_download_url":"https://github.com/senkatto/Warpy/releases/download/v1.3.0-beta.2/latest.json"}]}
             ]"#,
         );
         assert_eq!(
-            select_release(&fixture, UpdateChannel::Stable)
+            select_release(&fixture)
                 .unwrap()
                 .unwrap()
                 .version
                 .to_string(),
             "1.2.0"
-        );
-        assert_eq!(
-            select_release(&fixture, UpdateChannel::Beta)
-                .unwrap()
-                .unwrap()
-                .version
-                .to_string(),
-            "1.3.0-beta.2"
         );
     }
 
@@ -370,28 +333,25 @@ mod tests {
               {"tag_name":"v1.2.0","draft":false,"prerelease":false,"body":"","assets":[{"name":"latest.json","browser_download_url":"https://github.com/senkatto/Warpy/releases/download/v1.2.0/latest.json"}]}
             ]"#,
         );
-        let target = select_release(&rollback, UpdateChannel::Stable)
-            .unwrap()
-            .unwrap();
+        let target = select_release(&rollback).unwrap().unwrap();
         assert!(target.rollback);
         assert_eq!(target.version.to_string(), "1.1.0");
 
         let untrusted = releases(
             r#"[{"tag_name":"v1.2.0","draft":false,"prerelease":false,"body":"","assets":[{"name":"latest.json","browser_download_url":"https://example.com/latest.json"}]}]"#,
         );
-        assert!(select_release(&untrusted, UpdateChannel::Stable).is_err());
+        assert!(select_release(&untrusted).is_err());
     }
 
     #[test]
-    fn unknown_channels_and_ambiguous_rollbacks_are_rejected() {
-        assert!(UpdateChannel::parse("nightly").is_err());
+    fn ambiguous_rollbacks_are_rejected() {
         let fixture = releases(
             r#"[
               {"tag_name":"v1.0.0","draft":false,"prerelease":false,"body":"[warpy-rollback:stable]","assets":[{"name":"latest.json","browser_download_url":"https://github.com/senkatto/Warpy/releases/download/v1.0.0/latest.json"}]},
               {"tag_name":"v1.1.0","draft":false,"prerelease":false,"body":"[warpy-rollback:stable]","assets":[{"name":"latest.json","browser_download_url":"https://github.com/senkatto/Warpy/releases/download/v1.1.0/latest.json"}]}
             ]"#,
         );
-        assert!(select_release(&fixture, UpdateChannel::Stable).is_err());
+        assert!(select_release(&fixture).is_err());
     }
 
     #[test]

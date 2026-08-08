@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { buildSingBoxConfig } from '../src/vpn-config.js';
 import {
   AUTO_SUBSCRIPTION_REFRESH_INTERVAL_MS,
   findProfileIndexAfterSubscriptionUpdate,
@@ -134,6 +135,29 @@ test('extracts supported outbounds from sing-box JSON without applying unrelated
   assert.deepEqual(result.profiles[3].alpn, ['h3']);
 });
 
+test('parses endpoint-only sing-box JSON and skips incomplete profiles', () => {
+  const result = parseSubscriptionPayload(JSON.stringify({
+    outbounds: [
+      { type: 'vless', tag: 'Incomplete', server: 'broken.example.com', server_port: 443 },
+    ],
+    endpoints: [
+      {
+        type: 'wireguard',
+        tag: 'WireGuard endpoint',
+        server: 'wg.example.com',
+        server_port: 51820,
+        private_key: 'private-key',
+        peer_public_key: 'public-key',
+        local_address: ['10.0.0.2/32'],
+      },
+    ],
+  }));
+
+  assert.equal(result.skipped, 1);
+  assert.equal(result.profiles.length, 1);
+  assert.equal(result.profiles[0].protocol, 'wireguard');
+});
+
 test('supports Base64 sing-box JSON and rejects JSON without usable proxy outbounds', () => {
   const config = JSON.stringify({ outbounds: [{
     type: 'trojan',
@@ -253,9 +277,12 @@ proxies:
   const result = parseSubscriptionPayload(payload);
 
   assert.equal(result.format, 'clash-yaml');
-  assert.equal(result.profiles.length, 3);
-  assert.equal(result.skipped, 1);
-  assert.deepEqual(result.profiles.map(profile => profile.protocol), ['vless', 'trojan', 'hysteria2']);
+  assert.equal(result.profiles.length, 4);
+  assert.equal(result.skipped, 0);
+  assert.deepEqual(
+    result.profiles.map(profile => profile.protocol),
+    ['vless', 'trojan', 'hysteria2', 'socks'],
+  );
   assert.deepEqual(
     {
       host: result.profiles[0].host,
@@ -285,6 +312,99 @@ proxies:
   assert.equal(result.profiles[2].uuid, ' hy-secret ');
   assert.equal(result.profiles[2].obfsType, 'salamander');
   assert.equal(result.profiles[2].obfsPassword, ' obfs-secret ');
+  assert.equal(result.profiles[3].host, '127.0.0.1');
+  assert.equal(result.profiles[3].port, 1080);
+});
+
+test('preserves every advertised protocol from sing-box JSON', () => {
+  const payload = JSON.stringify({ outbounds: [
+    {
+      type: 'vmess', tag: 'VMess', server: 'vmess.example.com', server_port: 443,
+      uuid: '00000000-0000-4000-8000-000000000111', security: 'auto', alter_id: 0,
+      tls: { enabled: true, server_name: 'vmess.example.com' },
+      transport: { type: 'httpupgrade', path: '/upgrade', host: 'cdn.example.com' },
+    },
+    {
+      type: 'shadowsocks', tag: 'Shadowsocks', server: 'ss.example.com', server_port: 8388,
+      method: 'aes-256-gcm', password: 'ss-secret', plugin: 'v2ray-plugin',
+      plugin_opts: 'tls;host=cdn.example.com;path=/ws',
+    },
+    { type: 'socks', tag: 'Anonymous SOCKS', server: 'socks.example.com', server_port: 1080 },
+    {
+      type: 'wireguard', tag: 'WireGuard', private_key: 'private-key',
+      address: ['10.0.0.2/32'], mtu: 1380,
+      peers: [{ address: 'wg.example.com', port: 51820, public_key: 'public-key', reserved: [1, 2, 3] }],
+    },
+    {
+      type: 'tuic', tag: 'TUIC', server: 'tuic.example.com', server_port: 443,
+      uuid: '00000000-0000-4000-8000-000000000222', password: 'tuic-secret',
+      congestion_control: 'bbr', udp_relay_mode: 'native',
+      tls: { enabled: true, server_name: 'tuic.example.com' },
+    },
+    {
+      type: 'hysteria', tag: 'Hysteria', server: 'hy.example.com', server_port: 443,
+      auth_str: 'hy-secret', obfs: 'obfs-secret', up_mbps: 50, down_mbps: 100,
+      tls: { enabled: true, server_name: 'hy.example.com' },
+    },
+  ] });
+
+  const result = parseSubscriptionPayload(payload);
+  assert.deepEqual(
+    result.profiles.map(profile => profile.protocol),
+    ['vmess', 'shadowsocks', 'socks', 'wireguard', 'tuic', 'hysteria'],
+  );
+  assert.equal(result.skipped, 0);
+  assert.equal(result.profiles[0].transport, 'httpupgrade');
+  assert.equal(result.profiles[1].pluginOptions, 'tls;host=cdn.example.com;path=/ws');
+  assert.equal(result.profiles[2].username, '');
+  assert.equal(result.profiles[3].localAddress, '10.0.0.2/32');
+  assert.equal(result.profiles[3].reserved, '1,2,3');
+  assert.equal(result.profiles[4].password, 'tuic-secret');
+  assert.equal(result.profiles[5].uuid, 'hy-secret');
+  result.profiles.forEach(profile => assert.doesNotThrow(() => buildSingBoxConfig(profile)));
+});
+
+test('preserves protocol-specific Clash credentials instead of treating every password as a UUID', () => {
+  const result = parseSubscriptionPayload(`
+proxies:
+  - { name: VMess, type: vmess, server: vmess.example.com, port: 443, uuid: 00000000-0000-4000-8000-000000000333, cipher: auto }
+  - { name: SS, type: ss, server: ss.example.com, port: 8388, cipher: aes-256-gcm, password: ss-secret }
+  - { name: SOCKS, type: socks5, server: socks.example.com, port: 1080, username: user, password: pass }
+  - name: WireGuard
+    type: wireguard
+    server: wg.example.com
+    port: 51820
+    ip: 10.0.0.2/32
+    private-key: private-key
+    public-key: public-key
+    reserved: [1, 2, 3]
+  - { name: TUIC, type: tuic, server: tuic.example.com, port: 443, uuid: 00000000-0000-4000-8000-000000000444, password: tuic-secret, sni: tuic.example.com }
+  - { name: Hysteria, type: hysteria, server: hy.example.com, port: 443, auth-str: hy-secret, obfs: obfs-secret, sni: hy.example.com }
+`);
+
+  assert.deepEqual(
+    result.profiles.map(profile => profile.protocol),
+    ['vmess', 'shadowsocks', 'socks', 'wireguard', 'tuic', 'hysteria'],
+  );
+  assert.equal(result.profiles[0].uuid, '00000000-0000-4000-8000-000000000333');
+  assert.equal(result.profiles[1].encryption, 'aes-256-gcm');
+  assert.equal(result.profiles[1].password, 'ss-secret');
+  assert.equal(result.profiles[2].username, 'user');
+  assert.equal(result.profiles[3].privateKey, 'private-key');
+  assert.equal(result.profiles[4].password, 'tuic-secret');
+  assert.equal(result.profiles[5].uuid, 'hy-secret');
+  result.profiles.forEach(profile => assert.doesNotThrow(() => buildSingBoxConfig(profile)));
+});
+
+test('preserves numeric Clash passwords as text', () => {
+  const result = parseSubscriptionPayload(`
+proxies:
+  - { name: Numeric password, type: trojan, server: trojan.example.com, port: 443, password: 123456 }
+`);
+
+  assert.equal(result.profiles.length, 1);
+  assert.equal(result.profiles[0].protocol, 'trojan');
+  assert.equal(result.profiles[0].uuid, '123456');
 });
 
 test('supports Base64 Clash YAML with gRPC options', () => {
@@ -377,6 +497,20 @@ test('deduplicates renamed copies without exposing the profile name as identity'
     subscriptionProfileKey(result.profiles[0]),
     links[0].split('#', 1)[0],
   );
+});
+
+test('structured profile identity includes transport and TLS semantics', () => {
+  const base = {
+    protocol: 'vless',
+    host: 'vpn.example.com',
+    port: 443,
+    uuid: '00000000-0000-4000-8000-000000000001',
+    raw: '',
+  };
+  const websocket = { ...base, transport: 'ws', path: '/ws', sni: 'one.example.com' };
+  const grpc = { ...base, transport: 'grpc', serviceName: 'vpn', sni: 'two.example.com' };
+
+  assert.notEqual(subscriptionProfileKey(websocket), subscriptionProfileKey(grpc));
 });
 
 test('rejects HTML, empty data and oversized payloads', () => {

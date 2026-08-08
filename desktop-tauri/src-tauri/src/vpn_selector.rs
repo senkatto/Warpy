@@ -1,9 +1,8 @@
 #![cfg(windows)]
 
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fmt,
     io::{Read, Write},
     net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
@@ -27,7 +26,6 @@ pub(crate) struct SelectorControl {
     secret: String,
     selector: String,
     outbounds: BTreeSet<String>,
-    outbound_ids: BTreeMap<String, String>,
     selected: String,
 }
 
@@ -63,31 +61,17 @@ impl SelectorControl {
         self.outbounds.contains(outbound)
     }
 
-    pub(crate) fn health_targets(&self) -> Vec<(String, String)> {
-        self.outbounds
-            .iter()
-            .filter_map(|outbound| {
-                self.outbound_ids
-                    .get(outbound)
-                    .map(|profile_id| (outbound.clone(), profile_id.clone()))
-            })
-            .collect()
-    }
-
-    pub(crate) fn profile_id(&self, outbound: &str) -> Option<&str> {
-        self.outbound_ids.get(outbound).map(String::as_str)
-    }
-
     pub(crate) fn forget(&mut self, outbound: &str) -> Result<(), String> {
+        if self.selected == outbound {
+            return Err("SELECTOR_SELECTED_OUTBOUND".to_string());
+        }
+        if self.outbounds.len() <= 1 {
+            return Err("SELECTOR_LAST_OUTBOUND".to_string());
+        }
         if !self.outbounds.remove(outbound) {
             return Err("SELECTOR_UNKNOWN_OUTBOUND".to_string());
         }
-        self.outbound_ids.remove(outbound);
         Ok(())
-    }
-
-    pub(crate) fn same_runtime(&self, other: &Self) -> bool {
-        self.address == other.address && self.secret == other.secret
     }
 
     pub(crate) fn probe_outbound(&self, outbound: &str) -> Result<u64, String> {
@@ -170,6 +154,52 @@ pub(crate) fn update_selected_outbound(config: &str, outbound: &str) -> Result<S
     Ok(config.to_string())
 }
 
+pub(crate) fn remove_outbound(config: &str, outbound: &str) -> Result<String, String> {
+    let mut config: Value = serde_json::from_str(config)
+        .map_err(|error| format!("Некорректная конфигурация: {error}"))?;
+    let outbounds = config
+        .get_mut("outbounds")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "SELECTOR_NOT_AVAILABLE".to_string())?;
+    let selector_index = outbounds
+        .iter()
+        .position(|candidate| {
+            candidate.get("type").and_then(Value::as_str) == Some("selector")
+                && candidate.get("tag").and_then(Value::as_str) == Some(SELECTOR_TAG)
+        })
+        .ok_or_else(|| "SELECTOR_NOT_AVAILABLE".to_string())?;
+    let matching_outbounds = outbounds
+        .iter()
+        .filter(|candidate| candidate.get("tag").and_then(Value::as_str) == Some(outbound))
+        .count();
+    if matching_outbounds != 1 {
+        return Err("SELECTOR_UNKNOWN_OUTBOUND".to_string());
+    }
+
+    let selector = outbounds[selector_index]
+        .as_object_mut()
+        .ok_or_else(|| "SELECTOR_NOT_AVAILABLE".to_string())?;
+    if selector.get("default").and_then(Value::as_str) == Some(outbound) {
+        return Err("SELECTOR_SELECTED_OUTBOUND".to_string());
+    }
+    let selector_outbounds = selector
+        .get_mut("outbounds")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "SELECTOR_NOT_AVAILABLE".to_string())?;
+    if !selector_outbounds
+        .iter()
+        .any(|value| value.as_str() == Some(outbound))
+    {
+        return Err("SELECTOR_UNKNOWN_OUTBOUND".to_string());
+    }
+    if selector_outbounds.len() <= 1 {
+        return Err("SELECTOR_LAST_OUTBOUND".to_string());
+    }
+    selector_outbounds.retain(|value| value.as_str() != Some(outbound));
+    outbounds.retain(|candidate| candidate.get("tag").and_then(Value::as_str) != Some(outbound));
+    Ok(config.to_string())
+}
+
 pub(crate) fn prepare_config(config: &str) -> Result<(String, Option<SelectorControl>), String> {
     let mut config: Value = serde_json::from_str(config)
         .map_err(|error| format!("Некорректная конфигурация: {error}"))?;
@@ -205,8 +235,6 @@ pub(crate) fn prepare_config(config: &str) -> Result<(String, Option<SelectorCon
         .or_else(|| outbounds.first().map(String::as_str))
         .ok_or_else(|| "Selector VPN не содержит активного сервера".to_string())?
         .to_string();
-    let outbound_ids = build_outbound_ids(&config, &outbounds)?;
-
     let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .and_then(|listener| listener.local_addr())
         .map_err(|error| format!("Не удалось подготовить управление VPN: {error}"))?
@@ -237,43 +265,9 @@ pub(crate) fn prepare_config(config: &str) -> Result<(String, Option<SelectorCon
             secret,
             selector: SELECTOR_TAG.to_string(),
             outbounds,
-            outbound_ids,
             selected,
         }),
     ))
-}
-
-fn build_outbound_ids(
-    config: &Value,
-    outbounds: &BTreeSet<String>,
-) -> Result<BTreeMap<String, String>, String> {
-    let configured = config
-        .get("outbounds")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "Selector VPN не содержит серверов".to_string())?;
-    outbounds
-        .iter()
-        .map(|tag| {
-            let outbound = configured
-                .iter()
-                .find(|candidate| candidate.get("tag").and_then(Value::as_str) == Some(tag))
-                .ok_or_else(|| format!("Selector VPN не содержит сервер {tag}"))?;
-            Ok((tag.clone(), outbound_fingerprint(outbound)?))
-        })
-        .collect()
-}
-
-fn outbound_fingerprint(outbound: &Value) -> Result<String, String> {
-    let mut identity = outbound.clone();
-    identity
-        .as_object_mut()
-        .ok_or_else(|| "Некорректный сервер VPN".to_string())?
-        .remove("tag");
-    let encoded = serde_json::to_vec(&identity).map_err(|error| error.to_string())?;
-    let mut digest = Sha256::new();
-    digest.update(b"warpy-health-profile-v1\0");
-    digest.update(encoded);
-    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn send_selection(control: &SelectorControl, outbound: &str) -> Result<(), String> {
@@ -385,9 +379,12 @@ fn random_secret() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{prepare_config, update_selected_outbound, SelectorControl, SelectorSwitchError};
+    use super::{
+        prepare_config, remove_outbound, update_selected_outbound, SelectorControl,
+        SelectorSwitchError,
+    };
     use std::{
-        collections::{BTreeMap, BTreeSet},
+        collections::BTreeSet,
         io::{Read, Write},
         net::TcpListener,
         thread,
@@ -432,28 +429,6 @@ mod tests {
     }
 
     #[test]
-    fn profile_fingerprint_is_stable_across_runtime_tags() {
-        let config = r#"{
-          "outbounds": [
-            {"type":"selector","tag":"proxy","outbounds":["profile-1","profile-2","profile-3"]},
-            {"type":"trojan","tag":"profile-1","server":"example.com","server_port":443,"password":"same-secret"},
-            {"type":"trojan","tag":"profile-2","server":"example.com","server_port":443,"password":"same-secret"},
-            {"type":"trojan","tag":"profile-3","server":"example.com","server_port":443,"password":"other-secret"}
-          ]
-        }"#;
-        let (_, control) = prepare_config(config).expect("prepare selector config");
-        let targets = control.expect("selector control").health_targets();
-        let first = &targets[0].1;
-        let second = &targets[1].1;
-        let third = &targets[2].1;
-
-        assert_eq!(first.len(), 64);
-        assert_eq!(first, second);
-        assert_ne!(first, third);
-        assert!(!first.contains("same-secret"));
-    }
-
-    #[test]
     fn sends_authenticated_selector_request_and_updates_state() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test controller");
         let address = listener.local_addr().unwrap();
@@ -476,10 +451,6 @@ mod tests {
             secret: "private-secret".to_string(),
             selector: "proxy".to_string(),
             outbounds: BTreeSet::from(["profile-1".to_string(), "profile-2".to_string()]),
-            outbound_ids: BTreeMap::from([
-                ("profile-1".to_string(), "id-1".to_string()),
-                ("profile-2".to_string(), "id-2".to_string()),
-            ]),
             selected: "profile-1".to_string(),
         };
 
@@ -495,7 +466,6 @@ mod tests {
             secret: "private-secret".to_string(),
             selector: "proxy".to_string(),
             outbounds: BTreeSet::from(["profile-1".to_string()]),
-            outbound_ids: BTreeMap::from([("profile-1".to_string(), "id-1".to_string())]),
             selected: "profile-1".to_string(),
         };
 
@@ -530,10 +500,6 @@ mod tests {
             secret: "private-secret".to_string(),
             selector: "proxy".to_string(),
             outbounds: BTreeSet::from(["profile-1".to_string(), "profile-2".to_string()]),
-            outbound_ids: BTreeMap::from([
-                ("profile-1".to_string(), "id-1".to_string()),
-                ("profile-2".to_string(), "id-2".to_string()),
-            ]),
             selected: "profile-1".to_string(),
         };
 
@@ -581,10 +547,6 @@ mod tests {
             secret: "private-secret".to_string(),
             selector: "proxy".to_string(),
             outbounds: BTreeSet::from(["profile-1".to_string(), "profile-2".to_string()]),
-            outbound_ids: BTreeMap::from([
-                ("profile-1".to_string(), "id-1".to_string()),
-                ("profile-2".to_string(), "id-2".to_string()),
-            ]),
             selected: "profile-1".to_string(),
         };
 
@@ -635,10 +597,6 @@ mod tests {
             secret: "private-secret".to_string(),
             selector: "proxy".to_string(),
             outbounds: BTreeSet::from(["profile-1".to_string(), "profile-2".to_string()]),
-            outbound_ids: BTreeMap::from([
-                ("profile-1".to_string(), "id-1".to_string()),
-                ("profile-2".to_string(), "id-2".to_string()),
-            ]),
             selected: "profile-1".to_string(),
         };
 
@@ -682,5 +640,65 @@ mod tests {
             update_selected_outbound(config, "profile-2").unwrap_err(),
             "SELECTOR_UNKNOWN_OUTBOUND"
         );
+    }
+
+    #[test]
+    fn removes_inactive_outbound_from_selector_and_recovery_config() {
+        let config = r#"{
+          "outbounds": [
+            {"type":"selector","tag":"proxy","outbounds":["profile-1","profile-2"],"default":"profile-1"},
+            {"type":"direct","tag":"profile-1"},
+            {"type":"direct","tag":"profile-2"}
+          ]
+        }"#;
+
+        let updated = remove_outbound(config, "profile-2").expect("remove inactive outbound");
+        let updated: serde_json::Value = serde_json::from_str(&updated).unwrap();
+        assert_eq!(
+            updated.pointer("/outbounds/0/outbounds"),
+            Some(&serde_json::json!(["profile-1"]))
+        );
+        assert!(
+            updated
+                .get("outbounds")
+                .and_then(serde_json::Value::as_array)
+                .unwrap()
+                .iter()
+                .all(|value| value.get("tag").and_then(serde_json::Value::as_str)
+                    != Some("profile-2"))
+        );
+    }
+
+    #[test]
+    fn rejects_removing_selected_outbound() {
+        let config = r#"{
+          "outbounds": [
+            {"type":"selector","tag":"proxy","outbounds":["profile-1","profile-2"],"default":"profile-1"},
+            {"type":"direct","tag":"profile-1"},
+            {"type":"direct","tag":"profile-2"}
+          ]
+        }"#;
+
+        assert_eq!(
+            remove_outbound(config, "profile-1").unwrap_err(),
+            "SELECTOR_SELECTED_OUTBOUND"
+        );
+    }
+
+    #[test]
+    fn runtime_control_rejects_forgetting_selected_outbound() {
+        let mut control = SelectorControl {
+            address: "127.0.0.1:9".parse().unwrap(),
+            secret: "private-secret".to_string(),
+            selector: "proxy".to_string(),
+            outbounds: BTreeSet::from(["profile-1".to_string(), "profile-2".to_string()]),
+            selected: "profile-1".to_string(),
+        };
+
+        assert_eq!(
+            control.forget("profile-1").unwrap_err(),
+            "SELECTOR_SELECTED_OUTBOUND"
+        );
+        assert!(control.supports("profile-1"));
     }
 }

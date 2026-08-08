@@ -4,21 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: "Activate a signed rollback or clear the channel marker"
+        description: "Activate a signed rollback or clear the rollback marker"
         required: true
         default: activate
         type: choice
         options:
           - activate
           - clear
-      channel:
-        description: "Release channel"
-        required: true
-        default: stable
-        type: choice
-        options:
-          - stable
-          - beta
       target_tag:
         description: "Published signed release tag; required for activate"
         required: false
@@ -33,7 +25,6 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       ROLLBACK_ACTION: ${{ inputs.action }}
-      ROLLBACK_CHANNEL: ${{ inputs.channel }}
       TARGET_TAG: ${{ inputs.target_tag }}
 
     steps:
@@ -47,18 +38,17 @@ jobs:
           RELEASE_JSON="$release_json" node <<'NODE'
           const release = JSON.parse(process.env.RELEASE_JSON);
           if (release.isDraft) throw new Error('rollback target must already be published');
-          if (process.env.ROLLBACK_CHANNEL === 'stable' && release.isPrerelease) {
-            throw new Error('stable rollback cannot target a prerelease');
+          if (release.isPrerelease) throw new Error('rollback target must be a stable release');
+          if (!release.assets.some(asset => asset.name === 'latest.json')) {
+            throw new Error('rollback target is missing latest.json');
           }
-          const feed = release.isPrerelease ? 'latest-beta.json' : 'latest.json';
-          if (!release.assets.some(asset => asset.name === feed)) throw new Error(`missing ${feed}`);
           NODE
 
-      - name: Set one rollback marker for the channel
+      - name: Set stable rollback marker
         shell: bash
         run: |
           set -euo pipefail
-          marker="[warpy-rollback:$ROLLBACK_CHANNEL]"
+          marker="[warpy-rollback:stable]"
           mapfile -t tags < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isDraft --jq '.[] | select(.isDraft == false) | .tagName')
           for tag in "${tags[@]}"; do
             body="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""')"

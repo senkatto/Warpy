@@ -9,7 +9,9 @@ import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.warpy.app.BuildConfig
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.InputStream
 import java.net.URI
 import java.security.MessageDigest
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +23,8 @@ import org.json.JSONArray
 private const val RELEASES_API =
     "https://api.github.com/repos/senkatto/Warpy/releases?per_page=30"
 private const val TRUSTED_RELEASE_PATH = "/senkatto/Warpy/releases/download/"
+internal const val MAX_UPDATE_APK_BYTES = 200L * 1024 * 1024
+internal const val MAX_RELEASE_FEED_BYTES = 1L * 1024 * 1024
 private val VERSION_TAG = Regex("^v(\\d+)\\.(\\d+)\\.(\\d+)$")
 
 enum class UpdateStage {
@@ -61,7 +65,8 @@ class WarpyUpdater(private val context: Context) {
             .build()
         val releases = client.newCall(request).execute().use { response ->
             check(response.isSuccessful) { "GitHub returned HTTP ${response.code}" }
-            JSONArray(checkNotNull(response.body).string())
+            val body = checkNotNull(response.body)
+            JSONArray(readUpdateFeed(body.byteStream(), body.contentLength()))
         }
         selectAndroidRelease(releases, BuildConfig.VERSION_NAME)
     }
@@ -85,6 +90,7 @@ class WarpyUpdater(private val context: Context) {
             client.newCall(request).execute().use { response ->
                 check(response.isSuccessful) { "Download returned HTTP ${response.code}" }
                 val body = checkNotNull(response.body)
+                body.contentLength().takeIf { it >= 0 }?.let(::requireUpdateSize)
                 val total = body.contentLength().takeIf { it > 0 }
                 body.byteStream().use { input ->
                     temporary.outputStream().buffered().use { output ->
@@ -95,6 +101,7 @@ class WarpyUpdater(private val context: Context) {
                             if (count < 0) break
                             output.write(buffer, 0, count)
                             downloaded += count
+                            requireUpdateSize(downloaded)
                             onProgress(total?.let { ((downloaded * 100 / it).coerceIn(0, 99)).toInt() })
                         }
                     }
@@ -111,8 +118,7 @@ class WarpyUpdater(private val context: Context) {
         }
     }
 
-    fun canRequestPackageInstalls(): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()
+    fun canRequestPackageInstalls(): Boolean = context.packageManager.canRequestPackageInstalls()
 
     fun installPermissionIntent(): Intent = Intent(
         Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
@@ -147,6 +153,27 @@ class WarpyUpdater(private val context: Context) {
             "Update signature mismatch"
         }
     }
+}
+
+internal fun requireUpdateSize(bytes: Long) {
+    require(bytes <= MAX_UPDATE_APK_BYTES) { "Update file is too large" }
+}
+
+internal fun readUpdateFeed(input: InputStream, declaredLength: Long): String {
+    if (declaredLength >= 0) {
+        require(declaredLength <= MAX_RELEASE_FEED_BYTES) { "Release feed is too large" }
+    }
+    val output = ByteArrayOutputStream()
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var total = 0L
+    while (true) {
+        val count = input.read(buffer)
+        if (count < 0) break
+        total += count
+        require(total <= MAX_RELEASE_FEED_BYTES) { "Release feed is too large" }
+        output.write(buffer, 0, count)
+    }
+    return output.toString(Charsets.UTF_8.name())
 }
 
 internal fun selectAndroidRelease(releases: JSONArray, currentVersion: String): AndroidRelease? {

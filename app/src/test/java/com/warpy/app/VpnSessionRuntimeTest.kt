@@ -4,7 +4,6 @@ import com.warpy.app.model.VpnState
 import com.warpy.app.vpn.session.ConnectionRecoveryResult
 import com.warpy.app.vpn.session.ElapsedClock
 import com.warpy.app.vpn.session.OutboundSwitchResult
-import com.warpy.app.vpn.session.PreferredRetryResult
 import com.warpy.app.vpn.session.RecoveryRequest
 import com.warpy.app.vpn.session.SessionValidationResult
 import com.warpy.app.vpn.session.ValidationReason
@@ -504,87 +503,13 @@ class VpnSessionRuntimeTest {
         runtime.close()
     }
 
-    @Test
-    fun `temporary fallback retries and restores the preferred profile`() = runBlocking {
-        val operations = FakeOperations(
-            validation = {
-                SessionValidationResult(
-                    succeeded = true,
-                    runtimeProfileTag = "profile_1",
-                )
-            },
-        )
-        val runtime = newRuntime(this, operations, preferredRetryDelayMillis = 5L)
-
-        runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
-        awaitProfile(runtime, "profile_0")
-
-        assertEquals(
-            1,
-            operations.calls.count { it == "retry:1:profile_1:profile_0" },
-        )
-        runtime.close()
-    }
-
-    @Test
-    fun `verified preferred retry rollback schedules another retry`() = runBlocking {
-        var retryCount = 0
-        val operations = FakeOperations(
-            validation = {
-                SessionValidationResult(
-                    succeeded = true,
-                    runtimeProfileTag = "profile_1",
-                )
-            },
-            preferredRetry = { preferred, _ ->
-                retryCount += 1
-                if (retryCount == 1) {
-                    PreferredRetryResult.RolledBack
-                } else {
-                    PreferredRetryResult.Succeeded(preferred)
-                }
-            },
-        )
-        val runtime = newRuntime(this, operations, preferredRetryDelayMillis = 5L)
-
-        runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
-        awaitProfile(runtime, "profile_0")
-
-        assertEquals(2, retryCount)
-        runtime.close()
-    }
-
-    @Test
-    fun `stop cancels a delayed preferred retry`() = runBlocking {
-        val operations = FakeOperations(
-            validation = {
-                SessionValidationResult(
-                    succeeded = true,
-                    runtimeProfileTag = "profile_1",
-                )
-            },
-        )
-        val runtime = newRuntime(this, operations, preferredRetryDelayMillis = 60_000L)
-        runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
-        awaitState(runtime, VpnState.Connected)
-
-        runtime.dispatch(VpnSessionEvent.StopRequested)
-        awaitState(runtime, VpnState.Stopped)
-        delay(20L)
-
-        assertEquals(0, operations.calls.count { it.startsWith("retry:") })
-        runtime.close()
-    }
-
     private fun newRuntime(
         scope: CoroutineScope,
         operations: FakeOperations,
-        preferredRetryDelayMillis: Long = 300_000L,
     ) = VpnSessionRuntime(
         scope = scope,
         reducer = VpnSessionReducer(ElapsedClock { 5_000L }),
         operations = operations,
-        preferredRetryDelayMillis = preferredRetryDelayMillis,
     )
 
     private suspend fun awaitState(runtime: VpnSessionRuntime, state: VpnState) {
@@ -621,10 +546,6 @@ class VpnSessionRuntimeTest {
         private val recovery: suspend (RecoveryRequest) -> ConnectionRecoveryResult = {
             ConnectionRecoveryResult.Succeeded("profile_0")
         },
-        private val preferredRetry: suspend (String, String) -> PreferredRetryResult =
-            { preferredProfileTag, _ ->
-                PreferredRetryResult.Succeeded(preferredProfileTag)
-            },
     ) : VpnSessionOperations {
         val calls = CopyOnWriteArrayList<String>()
 
@@ -661,15 +582,6 @@ class VpnSessionRuntimeTest {
         ): ConnectionRecoveryResult {
             calls += "recover:$generation:${request.reason}:${request.probeBeforeRefresh}:${request.resetConnectionsOnSuccess}"
             return recovery(request)
-        }
-
-        override suspend fun retryPreferredOutbound(
-            generation: Long,
-            preferredProfileTag: String,
-            runtimeProfileTag: String,
-        ): PreferredRetryResult {
-            calls += "retry:$generation:$runtimeProfileTag:$preferredProfileTag"
-            return preferredRetry(preferredProfileTag, runtimeProfileTag)
         }
 
         override fun cancelOperations(generation: Long) {

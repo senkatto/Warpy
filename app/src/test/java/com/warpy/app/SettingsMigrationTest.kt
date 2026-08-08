@@ -1,7 +1,6 @@
 package com.warpy.app
 
 import com.warpy.app.data.migrateProfilesForSchema
-import com.warpy.app.data.groupProfiles
 import com.warpy.app.data.parseProfilesJson
 import com.warpy.app.data.ProfilesSnapshotSource
 import com.warpy.app.data.selectProfilesSnapshot
@@ -32,25 +31,37 @@ class SettingsMigrationTest {
     fun currentSchemaPreservesExplicitCertificateVerification() {
         val profile = VpnProfile("hy2", Protocol.Hysteria2, "example.com", 443)
 
-        val migrated = migrateProfilesForSchema(listOf(profile), storedSchemaVersion = 3)
+        val migrated = migrateProfilesForSchema(listOf(profile), storedSchemaVersion = 4)
 
         assertFalse(migrated.single().allowInsecure)
     }
 
     @Test
-    fun repeatedCredentialsAreGroupedWithoutExternalFixtures() {
-        val sharedUuid = "00000000-0000-4000-8000-000000000001"
+    fun schema3RemovesLegacyProviderGrouping() {
         val profiles = listOf(
-            VpnProfile("Amsterdam", Protocol.Vless, "nl.example.com", 443, uuid = sharedUuid),
-            VpnProfile("Athens", Protocol.Vless, "gr.example.com", 443, uuid = sharedUuid),
-            VpnProfile("Vienna", Protocol.Vless, "at.example.com", 443, uuid = sharedUuid),
-            VpnProfile("Personal", Protocol.Hysteria2, "hy2.example.com", 443, password = "fixture"),
+            VpnProfile("Imported", Protocol.Vless, "vpn.example.com", 443, group = "BlancVPN"),
+            VpnProfile("Personal", Protocol.Hysteria2, "hy2.example.com", 443, group = "Personal"),
         )
 
-        val grouped = groupProfiles(profiles)
+        val migrated = migrateProfilesForSchema(profiles, storedSchemaVersion = 3)
 
-        assertTrue(grouped.take(3).all { it.group == "BlancVPN" })
-        assertTrue(grouped.last().group.isBlank())
+        assertTrue(migrated.first().group.isBlank())
+        assertEquals("Personal", migrated.last().group)
+    }
+
+    @Test
+    fun currentSchemaPreservesExplicitGroups() {
+        val profile = VpnProfile(
+            "Imported",
+            Protocol.Vless,
+            "vpn.example.com",
+            443,
+            group = "BlancVPN",
+        )
+
+        val migrated = migrateProfilesForSchema(listOf(profile), storedSchemaVersion = 4)
+
+        assertEquals("BlancVPN", migrated.single().group)
     }
 
     @Test
@@ -103,10 +114,14 @@ class SettingsMigrationTest {
                 security = "reality",
                 publicKey = "public-key",
                 shortId = "abcd",
+                alpn = listOf("h2", "http/1.1"),
                 transport = "xhttp",
                 host = "cdn.example.com",
                 path = "/warpy",
                 xhttpMode = "auto",
+                packetEncoding = "packetaddr",
+                plugin = "v2ray-plugin",
+                pluginOptions = "tls;host=cdn.example.com;path=/ws",
                 multiplex = true,
                 group = "Personal",
             ),

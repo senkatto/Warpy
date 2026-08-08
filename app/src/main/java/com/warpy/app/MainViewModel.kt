@@ -8,9 +8,10 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.warpy.app.data.ProfileParser
 import com.warpy.app.data.SettingsStore
-import com.warpy.app.data.groupProfiles
+import com.warpy.app.data.SubscriptionFetcher
+import com.warpy.app.data.SubscriptionParser
+import com.warpy.app.data.mergeImportedProfiles
 import com.warpy.app.model.AppSettings
 import com.warpy.app.model.AppLanguage
 import com.warpy.app.model.AppTunnelMode
@@ -27,13 +28,9 @@ import com.warpy.app.updates.UpdateUiState
 import com.warpy.app.updates.WarpyUpdater
 import android.content.Intent
 import java.io.File
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
-import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.Socket
-import java.net.URL
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -59,6 +56,33 @@ data class MainUiState(
     val autoConnectImportedProfileIndex: Int? = null,
     val update: UpdateUiState = UpdateUiState(),
 )
+
+internal enum class ProfileRemovalRuntimeAction {
+    Keep,
+    Restart,
+    Stop,
+}
+
+internal fun profileRemovalRuntimeAction(
+    removedIndex: Int,
+    remainingProfileCount: Int,
+    runtimeProfileIndex: Int?,
+    activeProfileIndex: Int,
+    uiConnectionActive: Boolean,
+    serviceShouldRun: Boolean,
+): ProfileRemovalRuntimeAction {
+    if (!uiConnectionActive && !serviceShouldRun) return ProfileRemovalRuntimeAction.Keep
+    if (remainingProfileCount == 0) return ProfileRemovalRuntimeAction.Stop
+
+    val effectiveRuntimeIndex = runtimeProfileIndex
+        ?: activeProfileIndex.takeUnless { serviceShouldRun }
+        ?: return ProfileRemovalRuntimeAction.Restart
+    return if (removedIndex <= effectiveRuntimeIndex) {
+        ProfileRemovalRuntimeAction.Restart
+    } else {
+        ProfileRemovalRuntimeAction.Keep
+    }
+}
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val store = SettingsStore(application)
@@ -201,46 +225,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun importProfile(value: String): Boolean {
         val trimmed = value.trim()
-        if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
-            // Asynchronously fetch subscription
+        if (trimmed.startsWith("http://", ignoreCase = true)) {
+            fail("Подписка должна использовать HTTPS")
+            return false
+        }
+        if (trimmed.startsWith("https://", ignoreCase = true)) {
             _state.value = _state.value.copy(
                 commandError = null,
             )
             viewModelScope.launch(Dispatchers.IO) {
-                val resultText = runCatching {
-                    val conn = URL(trimmed).openConnection() as HttpURLConnection
-                    conn.connectTimeout = 10000
-                    conn.readTimeout = 10000
-                    conn.setRequestProperty("User-Agent", "v2rayN/Clash/Warpy")
-                    try {
-                        conn.inputStream.use { it.readUtf8WithLimit(MAX_SUBSCRIPTION_BYTES) }
-                    } finally {
-                        conn.disconnect()
-                    }
-                }
+                val result = SubscriptionFetcher.fetch(trimmed).fold(
+                    onSuccess = SubscriptionParser::parse,
+                    onFailure = { Result.failure(it) },
+                )
                 withContext(Dispatchers.Main) {
-                    resultText.onSuccess { rawText ->
-                        val content = rawText.trim()
-                        val isBase64 = !content.contains("://")
-                        val decodedText = if (isBase64) {
-                            runCatching {
-                                android.util.Base64.decode(content, android.util.Base64.DEFAULT).decodeToString()
-                            }.getOrDefault(content)
-                        } else {
-                            content
-                        }
-
-                        val lines = decodedText.split(Regex("[\r\n]+")).map { it.trim() }.filter { it.isNotBlank() }
-                        val parsedProfiles = mutableListOf<VpnProfile>()
-                        for (line in lines) {
-                            ProfileParser.parse(line).onSuccess { parsedProfiles.add(it) }
-                        }
-
-                        if (parsedProfiles.isEmpty()) {
-                            fail("Не удалось разобрать профили из подписки")
-                        } else {
-                            finishProfileImport(parsedProfiles)
-                        }
+                    result.onSuccess { parsed ->
+                        finishProfileImport(parsed.profiles)
                     }.onFailure { err ->
                         fail("Ошибка загрузки подписки: ${err.message}")
                     }
@@ -249,40 +249,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return true
         }
 
-        val lines = trimmed.split(Regex("[\r\n]+")).map { it.trim() }.filter { it.isNotBlank() }
-        val parsedProfiles = mutableListOf<VpnProfile>()
-        for (line in lines) {
-            ProfileParser.parse(line).onSuccess { parsedProfiles.add(it) }
-        }
-
-        if (parsedProfiles.isEmpty()) {
-            fail("Не удалось разобрать ссылки")
+        val parsed = SubscriptionParser.parse(trimmed).getOrElse { error ->
+            fail(error.message ?: "Не удалось разобрать профили")
             return false
         }
-
-        finishProfileImport(parsedProfiles)
+        finishProfileImport(parsed.profiles)
         return true
     }
 
     private fun finishProfileImport(importedProfiles: List<VpnProfile>) {
-        if (importedProfiles.isEmpty()) return
         val current = _state.value
+        val merged = mergeImportedProfiles(current.settings.profiles, importedProfiles) ?: return
         val wasRunning = current.diagnostics.status == VpnStatus.Connected ||
             current.diagnostics.status == VpnStatus.Connecting ||
             com.warpy.app.vpn.WarpyService.shouldBeRunning(getApplication())
-        val newProfiles = current.settings.profiles + importedProfiles
-        val importedIndex = newProfiles.lastIndex
-        updateSettings(
-            current.settings.copy(
-                profiles = newProfiles,
-                activeProfileIndex = if (wasRunning) current.settings.activeProfileIndex else importedIndex,
-            )
+        val nextSettings = current.settings.copy(
+            profiles = merged.profiles,
+            activeProfileIndex = if (wasRunning) current.settings.activeProfileIndex else merged.importedIndex,
         )
+        if (!updateSettings(nextSettings)) return
         _state.value = _state.value.copy(
             importText = "",
             commandError = null,
-            pendingImportedProfileIndex = importedIndex.takeIf { wasRunning },
-            autoConnectImportedProfileIndex = importedIndex.takeUnless { wasRunning },
+            pendingImportedProfileIndex = merged.importedIndex.takeIf { wasRunning },
+            autoConnectImportedProfileIndex = merged.importedIndex.takeUnless { wasRunning },
         )
         regenerateConfig()
     }
@@ -298,7 +288,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             dismissImportedProfilePrompt()
             return
         }
-        updateSettings(settings.copy(activeProfileIndex = index))
+        if (!updateSettings(settings.copy(activeProfileIndex = index))) return
         _state.value = _state.value.copy(pendingImportedProfileIndex = null)
         regenerateConfig()
         restartActiveRuntimeNow()
@@ -311,39 +301,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteProfile(index: Int) {
         val current = _state.value
         val settings = current.settings.removeProfile(index) ?: return
-        updateSettings(settings)
-        val runtimeProfileIndex = current.diagnostics.runtimeProfileIndex?.let { runtimeIndex ->
-            when {
-                runtimeIndex == index -> null
-                runtimeIndex > index -> runtimeIndex - 1
-                else -> runtimeIndex
-            }
-        }
-        val connectionIsActive = current.diagnostics.status == VpnStatus.Connected ||
+        val uiConnectionActive = current.diagnostics.status == VpnStatus.Connected ||
             current.diagnostics.status == VpnStatus.Connecting
+        val serviceShouldRun = com.warpy.app.vpn.WarpyService.shouldBeRunning(getApplication())
+        val runtimeAction = profileRemovalRuntimeAction(
+            removedIndex = index,
+            remainingProfileCount = settings.profiles.size,
+            runtimeProfileIndex = current.diagnostics.runtimeProfileIndex,
+            activeProfileIndex = current.settings.activeProfileIndex,
+            uiConnectionActive = uiConnectionActive,
+            serviceShouldRun = serviceShouldRun,
+        )
+        if (!updateSettings(settings)) return
         _state.value = _state.value.copy(
             importText = "",
             diagnostics = _state.value.diagnostics.copy(
-                runtimeProfileIndex = runtimeProfileIndex.takeIf { connectionIsActive },
+                runtimeProfileIndex = current.diagnostics.runtimeProfileIndex
+                    .takeIf { runtimeAction == ProfileRemovalRuntimeAction.Keep },
             ),
             commandError = null,
         )
         regenerateConfig()
-        val deletedRuntimeProfile = current.diagnostics.runtimeProfileIndex == index ||
-            (current.diagnostics.runtimeProfileIndex == null && current.settings.activeProfileIndex == index)
-        if (connectionIsActive && deletedRuntimeProfile) {
-            if (settings.profiles.isEmpty()) {
-                vpnCommands.stop()
-            } else {
-                restartActiveRuntimeNow()
-            }
+        when (runtimeAction) {
+            ProfileRemovalRuntimeAction.Keep -> Unit
+            ProfileRemovalRuntimeAction.Restart -> restartActiveRuntimeNow()
+            ProfileRemovalRuntimeAction.Stop -> vpnCommands.stop()
         }
     }
 
     fun selectProfile(index: Int) {
         val settings = _state.value.settings
         if (index !in settings.profiles.indices) return
-        updateSettings(settings.copy(activeProfileIndex = index))
+        if (!updateSettings(settings.copy(activeProfileIndex = index))) return
 
         clearCommandError()
         regenerateConfig()
@@ -351,32 +340,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setAdBlockEnabled(enabled: Boolean) {
-        updateSettings(_state.value.settings.copy(adBlockEnabled = enabled))
+        if (!updateSettings(_state.value.settings.copy(adBlockEnabled = enabled))) return
         regenerateConfig()
         scheduleActiveRuntimeRestart()
     }
 
     fun setBlockQuic(enabled: Boolean) {
-        store.markBlockQuicUserConfigured()
-        updateSettings(_state.value.settings.copy(blockQuic = enabled))
+        if (!store.markBlockQuicUserConfigured()) {
+            fail("Не удалось сохранить настройки")
+            return
+        }
+        if (!updateSettings(_state.value.settings.copy(blockQuic = enabled))) return
         regenerateConfig()
         scheduleActiveRuntimeRestart()
     }
 
     fun setBypassLan(enabled: Boolean) {
-        updateSettings(_state.value.settings.copy(bypassLan = enabled))
+        if (!updateSettings(_state.value.settings.copy(bypassLan = enabled))) return
         regenerateConfig()
         scheduleActiveRuntimeRestart()
     }
 
     fun setStabilityModeEnabled(enabled: Boolean) {
-        updateSettings(_state.value.settings.copy(stabilityModeEnabled = enabled))
+        if (!updateSettings(_state.value.settings.copy(stabilityModeEnabled = enabled))) return
         regenerateConfig()
         scheduleActiveRuntimeRestart()
     }
 
     fun setAutoStartOnBoot(enabled: Boolean) {
-        updateSettings(_state.value.settings.copy(autoStartOnBoot = enabled))
+        if (!updateSettings(_state.value.settings.copy(autoStartOnBoot = enabled))) return
         regenerateConfig()
     }
 
@@ -386,13 +378,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setMtu(mtu: Int) {
         val normalizedMtu = if (mtu == 0) 0 else mtu.coerceIn(1280, 1500)
-        updateSettings(_state.value.settings.copy(mtu = normalizedMtu))
+        if (!updateSettings(_state.value.settings.copy(mtu = normalizedMtu))) return
         regenerateConfig()
         scheduleActiveRuntimeRestart()
     }
 
     fun setAppTunnelMode(mode: AppTunnelMode) {
-        updateSettings(_state.value.settings.copy(appTunnelMode = mode))
+        if (!updateSettings(_state.value.settings.copy(appTunnelMode = mode))) return
         regenerateConfig()
         scheduleActiveRuntimeRestart()
     }
@@ -401,13 +393,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val settings = _state.value.settings
         val apps = settings.tunneledApps.toMutableSet()
         if (!apps.add(packageName)) apps.remove(packageName)
-        updateSettings(settings.copy(tunneledApps = apps))
+        if (!updateSettings(settings.copy(tunneledApps = apps))) return
         regenerateConfig()
         scheduleActiveRuntimeRestart()
     }
 
     fun setSiteTunnelMode(mode: AppTunnelMode) {
-        updateSettings(_state.value.settings.copy(siteTunnelMode = mode))
+        if (!updateSettings(_state.value.settings.copy(siteTunnelMode = mode))) return
         regenerateConfig()
         scheduleActiveRuntimeRestart()
     }
@@ -415,14 +407,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun addTunneledSite(value: String) {
         val site = normalizeTunnelSite(value) ?: return
         val settings = _state.value.settings
-        updateSettings(settings.copy(tunneledSites = settings.tunneledSites + site))
+        if (!updateSettings(settings.copy(tunneledSites = settings.tunneledSites + site))) return
         regenerateConfig()
         scheduleActiveRuntimeRestart()
     }
 
     fun removeTunneledSite(site: String) {
         val settings = _state.value.settings
-        updateSettings(settings.copy(tunneledSites = settings.tunneledSites - site))
+        if (!updateSettings(settings.copy(tunneledSites = settings.tunneledSites - site))) return
         regenerateConfig()
         scheduleActiveRuntimeRestart()
     }
@@ -472,11 +464,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?: current.connectedAtMillis
                 .takeIf { current.status == VpnStatus.Connected && it > 0L }
             ?: SystemClock.elapsedRealtime()
+        var settingsPersistenceFailed = false
         val settings = _state.value.settings.let { currentSettings ->
             if (runtimeProfileIndex in currentSettings.profiles.indices &&
                 runtimeProfileIndex != currentSettings.activeProfileIndex
             ) {
-                currentSettings.copy(activeProfileIndex = runtimeProfileIndex).also(store::save)
+                currentSettings.copy(activeProfileIndex = runtimeProfileIndex).also { nextSettings ->
+                    settingsPersistenceFailed = !store.save(nextSettings)
+                }
             } else {
                 currentSettings
             }
@@ -489,7 +484,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 connectedAtMillis = connectedAt,
                 runtimeProfileIndex = runtimeProfileIndex.takeIf { it in settings.profiles.indices },
             ),
-            commandError = null,
+            commandError = if (settingsPersistenceFailed) {
+                "Не удалось сохранить выбранный профиль"
+            } else {
+                null
+            },
         )
         updateConnectionStats()
     }
@@ -669,17 +668,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return _state.value.diagnostics.generatedConfig
     }
 
-    private fun updateSettings(settings: AppSettings) {
-        val groupedProfiles = groupProfiles(settings.profiles)
-        val groupedSettings = settings.copy(
-            profiles = groupedProfiles,
-            activeProfileIndex = settings.activeProfileIndex.coerceIn(0, groupedProfiles.lastIndex.coerceAtLeast(0))
+    private fun updateSettings(settings: AppSettings): Boolean {
+        val normalizedSettings = settings.copy(
+            activeProfileIndex = settings.activeProfileIndex.coerceIn(0, settings.profiles.lastIndex.coerceAtLeast(0))
         )
-        if (!store.save(groupedSettings)) {
+        if (!store.save(normalizedSettings)) {
             fail("Не удалось сохранить настройки")
-            return
+            return false
         }
-        _state.value = _state.value.copy(settings = groupedSettings)
+        _state.value = _state.value.copy(settings = normalizedSettings)
+        return true
     }
 
     private fun regenerateConfig() {
@@ -1038,7 +1036,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             "https://ash-speed.hetzner.com/100MB.bin",
         )
         const val UPLOAD_TEST_URL = "https://speed.cloudflare.com/__up"
-        const val MAX_SUBSCRIPTION_BYTES = 2 * 1024 * 1024
     }
 }
 
@@ -1052,21 +1049,6 @@ private fun normalizeTunnelSite(value: String): String? {
         .substringBefore(':')
         .trim('.')
     return host.takeIf { it.isNotBlank() && it.contains('.') && it.none(Char::isWhitespace) }
-}
-
-internal fun InputStream.readUtf8WithLimit(maxBytes: Int): String {
-    require(maxBytes > 0)
-    val output = ByteArrayOutputStream(minOf(maxBytes, DEFAULT_BUFFER_SIZE))
-    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-    var total = 0
-    while (true) {
-        val read = read(buffer)
-        if (read < 0) break
-        total += read
-        require(total <= maxBytes) { "Ответ подписки слишком большой" }
-        output.write(buffer, 0, read)
-    }
-    return output.toString(Charsets.UTF_8.name())
 }
 
 internal fun AppSettings.removeProfile(index: Int): AppSettings? {

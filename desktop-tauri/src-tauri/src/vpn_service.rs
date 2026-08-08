@@ -172,26 +172,6 @@ fn run_service() -> Result<(), String> {
             }
         });
 
-        let health_engine = Arc::clone(&engine);
-        let health_paths = paths.clone();
-        let health_running = Arc::clone(&running);
-        let health_ui_process_id = Arc::clone(&ui_process_id);
-        let health_monitor = thread::spawn(move || {
-            while health_running.load(Ordering::Acquire) {
-                if attached_ui_is_alive(health_ui_process_id.as_ref()) {
-                    if let Some(event) = health_engine.maintain_health(&health_paths) {
-                        append_service_log(&event);
-                    }
-                }
-                for _ in 0..10 {
-                    if !health_running.load(Ordering::Acquire) {
-                        return;
-                    }
-                    thread::sleep(Duration::from_millis(100));
-                }
-            }
-        });
-
         let result = run_server(
             &running,
             |request| {
@@ -209,11 +189,7 @@ fn run_service() -> Result<(), String> {
         drop(network_subscription);
         let _ = connectivity_sender.try_send(ConnectivityEvent::Stop);
         let _ = monitor.join();
-        let _ = health_monitor.join();
         let _ = connectivity_monitor.join();
-        if let Err(error) = engine.persist_health(&paths) {
-            append_service_log(&format!("health: не удалось сохранить историю: {error}"));
-        }
         let _ = engine.stop();
         result
     })();
@@ -332,9 +308,6 @@ fn handle_request(
         VpnRequest::NetworkStats => {
             serde_json::to_value(read_vpn_network_stats()?).map_err(|error| error.to_string())
         }
-        VpnRequest::Health => {
-            serde_json::to_value(engine.health_snapshot()?).map_err(|error| error.to_string())
-        }
         VpnRequest::KillSwitchStatus => Ok(json!(engine.kill_switch_status())),
         VpnRequest::AttachUi { process_id } => {
             if !process_is_running(process_id) {
@@ -353,20 +326,6 @@ fn handle_request(
             crate::windows_autostart::configure(enabled, process_id)?;
             Ok(Value::Null)
         }
-        VpnRequest::SetAutoMode { enabled } => {
-            if !attached_ui_is_alive(ui_process_id) {
-                return Err("Warpy must be running in the notification area".to_string());
-            }
-            engine.set_auto_mode(enabled)?;
-            Ok(Value::Null)
-        }
-        VpnRequest::SetPreferredOutbound { outbound } => {
-            if !attached_ui_is_alive(ui_process_id) {
-                return Err("Warpy must be running in the notification area".to_string());
-            }
-            engine.set_preferred_outbound(&outbound)?;
-            Ok(Value::Null)
-        }
         VpnRequest::ForgetOutbound { outbound } => {
             if !attached_ui_is_alive(ui_process_id) {
                 return Err("Warpy must be running in the notification area".to_string());
@@ -378,12 +337,11 @@ fn handle_request(
         VpnRequest::Start {
             config,
             kill_switch,
-            auto_mode,
         } => {
             if !attached_ui_is_alive(ui_process_id) {
                 return Err("Warpy must be running in the notification area".to_string());
             }
-            match engine.start(paths, &config, kill_switch, auto_mode) {
+            match engine.start(paths, &config, kill_switch) {
                 Ok(()) => {
                     append_service_log(&format!("kill switch: {}", engine.kill_switch_status()));
                     Ok(Value::Null)
@@ -419,38 +377,10 @@ fn collect_service_diagnostics(engine: &VpnEngine, paths: &EnginePaths) -> Servi
         matches!(status.as_str(), "Connected" | "Recovering" | "Validating")
             .then_some(now.saturating_sub(started_at) / 1_000)
     });
-    let health = engine.health_snapshot().ok();
-    let network_type = health
-        .as_ref()
-        .map(|snapshot| snapshot.network_type.clone())
-        .unwrap_or_else(|| "unknown".to_string());
-    let health_profile_count = health
-        .as_ref()
-        .map(|snapshot| snapshot.profiles.len())
-        .unwrap_or(0);
-    let healthy_profile_count = health
-        .as_ref()
-        .map(|snapshot| {
-            snapshot
-                .profiles
-                .iter()
-                .filter(|profile| profile.handshake_ok == Some(true))
-                .count()
-        })
-        .unwrap_or(0);
-    let auto_enabled = health
-        .as_ref()
-        .map(|snapshot| snapshot.auto_enabled)
-        .unwrap_or(false);
-
     ServiceDiagnostics {
         status,
         uptime_seconds,
         kill_switch: engine.kill_switch_status(),
-        network_type,
-        health_profile_count,
-        healthy_profile_count,
-        auto_enabled,
         service_log: collect_sanitized_log(&paths.app_dir.join("service.log"), false),
         core_errors: collect_sanitized_log(&paths.app_dir.join("sing-box.log"), true),
     }

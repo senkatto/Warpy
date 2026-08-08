@@ -190,6 +190,7 @@ import com.warpy.app.model.SpeedTestState
 import com.warpy.app.model.AppTunnelMode
 import com.warpy.app.model.VpnProfile
 import com.warpy.app.model.VpnStatus
+import com.warpy.app.data.ProfileLinkSerializer
 import com.warpy.app.localization.WarpyLocalization
 import com.warpy.app.localization.resolveAppLanguage
 import com.warpy.app.ui.WarpyTheme
@@ -2288,10 +2289,11 @@ private val ProfileListRowMinHeight = 70.dp
 @Composable
 private fun ShareProfileDialog(profile: VpnProfile, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val link = remember(profile) { profile.toShareLink() }
+    val linkResult = remember(profile) { ProfileLinkSerializer.serialize(profile) }
+    val link = linkResult.getOrNull()
     var showQr by remember { mutableStateOf(false) }
     val qrBitmap = remember(link, showQr) {
-        if (showQr) createQrBitmap(link, 720) else null
+        if (showQr && link != null) createQrBitmap(link, 720) else null
     }
 
     AlertDialog(
@@ -2299,7 +2301,13 @@ private fun ShareProfileDialog(profile: VpnProfile, onDismiss: () -> Unit) {
         title = { Text(profile.displayName()) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (showQr && qrBitmap != null) {
+                if (link == null) {
+                    Text(
+                        text = linkResult.exceptionOrNull()?.message
+                            ?: localizedText("Не удалось подготовить профиль"),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else if (showQr && qrBitmap != null) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -3591,65 +3599,6 @@ private fun createQrBitmap(value: String, size: Int): Bitmap {
         setPixels(pixels, 0, size, 0, 0, size, size)
     }
 }
-
-private fun VpnProfile.toShareLink(): String {
-    if (raw.isNotBlank()) return raw
-    return when (protocol) {
-    Protocol.Vless -> {
-        val params = buildQuery(
-            "security" to security,
-            "sni" to sni,
-            "flow" to flow,
-            "pbk" to publicKey,
-            "sid" to shortId,
-            "fp" to fingerprint,
-        )
-        "vless://${encodeLinkPart(uuid)}@$server:$port$params#${encodeLinkPart(displayName())}"
-    }
-    Protocol.Hysteria2 -> {
-        val params = buildQuery(
-            "insecure" to if (allowInsecure) "1" else "",
-            "sni" to sni,
-            "obfs" to hysteria2ObfsType,
-            "obfs-password" to hysteria2ObfsPassword,
-            "server_ports" to hysteria2ServerPorts,
-            "hop_interval" to hysteria2HopInterval,
-            "hop_interval_max" to hysteria2HopIntervalMax,
-            "up_mbps" to hysteria2UpMbps.takeIf { it > 0 }?.toString().orEmpty(),
-            "down_mbps" to hysteria2DownMbps.takeIf { it > 0 }?.toString().orEmpty(),
-        )
-        "hysteria2://${encodeLinkPart(password)}@$server:$port$params#${encodeLinkPart(displayName())}"
-    }
-    Protocol.Trojan -> {
-        val params = buildQuery(
-            "security" to security,
-            "insecure" to if (allowInsecure) "1" else "",
-            "sni" to sni,
-            "pbk" to publicKey,
-            "sid" to shortId,
-            "fp" to fingerprint,
-            "type" to transport,
-        )
-        "trojan://${encodeLinkPart(password)}@$server:$port$params#${encodeLinkPart(displayName())}"
-    }
-    Protocol.Vmess,
-    Protocol.Shadowsocks,
-    Protocol.Socks,
-    Protocol.WireGuard,
-    Protocol.Tuic,
-    Protocol.Hysteria -> ""
-    }
-}
-
-private fun buildQuery(vararg params: Pair<String, String>): String {
-    val query = params
-        .filter { (_, value) -> value.isNotBlank() }
-        .joinToString("&") { (name, value) -> "${encodeLinkPart(name)}=${encodeLinkPart(value)}" }
-    return if (query.isBlank()) "" else "?$query"
-}
-
-private fun encodeLinkPart(value: String): String =
-    Uri.encode(value).orEmpty()
 
 private fun VpnProfile.safeTitle(): String {
     val protocolName = when (protocol) {

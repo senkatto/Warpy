@@ -18,10 +18,6 @@ pub(crate) struct ServiceDiagnostics {
     pub(crate) status: String,
     pub(crate) uptime_seconds: Option<u64>,
     pub(crate) kill_switch: String,
-    pub(crate) network_type: String,
-    pub(crate) health_profile_count: usize,
-    pub(crate) healthy_profile_count: usize,
-    pub(crate) auto_enabled: bool,
     pub(crate) service_log: Vec<String>,
     pub(crate) core_errors: Vec<String>,
 }
@@ -37,8 +33,6 @@ pub(crate) struct DiagnosticsSettingsSummary {
     pub(crate) lan: bool,
     pub(crate) kill_switch: bool,
     pub(crate) resume_on_boot: bool,
-    pub(crate) network_auto_protect: bool,
-    pub(crate) warpy_auto: bool,
     pub(crate) mtu: u16,
     pub(crate) apps_mode: String,
     pub(crate) app_rule_count: usize,
@@ -83,10 +77,6 @@ pub(crate) struct ServiceSummary {
     status: String,
     uptime_seconds: Option<u64>,
     kill_switch: String,
-    network_type: String,
-    health_profile_count: usize,
-    healthy_profile_count: usize,
-    auto_enabled: bool,
 }
 
 impl ServiceDiagnostics {
@@ -95,12 +85,6 @@ impl ServiceDiagnostics {
             status: safe_status(&self.status),
             uptime_seconds: self.uptime_seconds,
             kill_switch: safe_kill_switch(&self.kill_switch),
-            network_type: safe_network_type(&self.network_type),
-            health_profile_count: self.health_profile_count.min(10_000),
-            healthy_profile_count: self
-                .healthy_profile_count
-                .min(self.health_profile_count.min(10_000)),
-            auto_enabled: self.auto_enabled,
         }
     }
 }
@@ -313,15 +297,6 @@ fn safe_kill_switch(value: &str) -> String {
     }
 }
 
-fn safe_network_type(value: &str) -> String {
-    let lower = value.to_ascii_lowercase();
-    allowed_choice(
-        &lower,
-        &["wifi", "ethernet", "cellular", "unknown"],
-        "unknown",
-    )
-}
-
 fn allowed_choice(value: &str, allowed: &[&str], fallback: &str) -> String {
     allowed
         .iter()
@@ -349,8 +324,6 @@ mod tests {
             lan: true,
             kill_switch: true,
             resume_on_boot: true,
-            network_auto_protect: true,
-            warpy_auto: true,
             mtu: 1_400,
             apps_mode: "bypass".to_string(),
             app_rule_count: 3,
@@ -366,10 +339,6 @@ mod tests {
             status: "Connected".to_string(),
             uptime_seconds: Some(42),
             kill_switch: "Armed".to_string(),
-            network_type: "wifi".to_string(),
-            health_profile_count: 2,
-            healthy_profile_count: 1,
-            auto_enabled: true,
             service_log: vec!["service started".to_string()],
             core_errors: vec!["ERROR [domain]".to_string()],
         }

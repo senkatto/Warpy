@@ -1,5 +1,6 @@
 package com.warpy.app
 
+import com.warpy.app.data.SubscriptionFetcher
 import java.io.ByteArrayInputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -10,7 +11,7 @@ class SubscriptionReadLimitTest {
     fun readsResponseWithinLimit() {
         val input = ByteArrayInputStream("vless://profile".toByteArray())
 
-        assertEquals("vless://profile", input.readUtf8WithLimit(64))
+        assertEquals("vless://profile", SubscriptionFetcher.readUtf8WithLimit(input, 64))
     }
 
     @Test
@@ -18,7 +19,7 @@ class SubscriptionReadLimitTest {
         val input = ByteArrayInputStream(ByteArray(65) { 'a'.code.toByte() })
 
         assertFailsWith<IllegalArgumentException> {
-            input.readUtf8WithLimit(64)
+            SubscriptionFetcher.readUtf8WithLimit(input, 64)
         }
     }
 
@@ -27,6 +28,6 @@ class SubscriptionReadLimitTest {
         val source = "Профиль подключения"
         val input = ByteArrayInputStream(source.toByteArray(Charsets.UTF_8))
 
-        assertEquals(source, input.readUtf8WithLimit(128))
+        assertEquals(source, SubscriptionFetcher.readUtf8WithLimit(input, 128))
     }
 }

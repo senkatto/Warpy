@@ -4,12 +4,10 @@ param()
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $version = $env:RELEASE_VERSION
-$channel = $env:RELEASE_CHANNEL
 $repository = if ($env:GITHUB_REPOSITORY) { $env:GITHUB_REPOSITORY } else { 'senkatto/Warpy' }
 $tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "v$version" }
 
 if ([string]::IsNullOrWhiteSpace($version)) { throw 'RELEASE_VERSION is required.' }
-if ($channel -notin @('stable', 'beta')) { throw 'RELEASE_CHANNEL must be stable or beta.' }
 if ($tag -ne "v$version") { throw "Release tag $tag does not match version $version." }
 $packageVersion = (Get-Content -Raw -LiteralPath (Join-Path $projectRoot 'package.json') | ConvertFrom-Json).version
 if ($packageVersion -ne $version) {
@@ -61,7 +59,6 @@ $latest = [ordered]@{
         }
     }
 }
-$latestName = if ($channel -eq 'stable') { 'latest.json' } else { 'latest-beta.json' }
-Write-JsonWithoutBom -Value $latest -Path (Join-Path $outputDirectory $latestName)
+Write-JsonWithoutBom -Value $latest -Path (Join-Path $outputDirectory 'latest.json')
 
-Write-Output "Prepared signed $channel release assets for Warpy $version."
+Write-Output "Prepared signed stable release assets for Warpy $version."

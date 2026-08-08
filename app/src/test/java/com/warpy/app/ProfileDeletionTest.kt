@@ -52,4 +52,94 @@ class ProfileDeletionTest {
         assertEquals(0, updated?.activeProfileIndex)
         assertEquals("one", updated?.profile?.name)
     }
+
+    @Test
+    fun disconnectedRuntimeDoesNotRestart() {
+        assertEquals(
+            ProfileRemovalRuntimeAction.Keep,
+            profileRemovalRuntimeAction(
+                removedIndex = 0,
+                remainingProfileCount = 2,
+                runtimeProfileIndex = 2,
+                activeProfileIndex = 2,
+                uiConnectionActive = false,
+                serviceShouldRun = false,
+            ),
+        )
+    }
+
+    @Test
+    fun removingProfileBeforeRuntimeRestartsToRebuildTags() {
+        assertEquals(
+            ProfileRemovalRuntimeAction.Restart,
+            profileRemovalRuntimeAction(
+                removedIndex = 0,
+                remainingProfileCount = 2,
+                runtimeProfileIndex = 2,
+                activeProfileIndex = 2,
+                uiConnectionActive = true,
+                serviceShouldRun = true,
+            ),
+        )
+    }
+
+    @Test
+    fun removingRuntimeProfileRestarts() {
+        assertEquals(
+            ProfileRemovalRuntimeAction.Restart,
+            profileRemovalRuntimeAction(
+                removedIndex = 1,
+                remainingProfileCount = 2,
+                runtimeProfileIndex = 1,
+                activeProfileIndex = 1,
+                uiConnectionActive = true,
+                serviceShouldRun = true,
+            ),
+        )
+    }
+
+    @Test
+    fun removingProfileAfterRuntimeKeepsConnection() {
+        assertEquals(
+            ProfileRemovalRuntimeAction.Keep,
+            profileRemovalRuntimeAction(
+                removedIndex = 2,
+                remainingProfileCount = 2,
+                runtimeProfileIndex = 0,
+                activeProfileIndex = 0,
+                uiConnectionActive = true,
+                serviceShouldRun = true,
+            ),
+        )
+    }
+
+    @Test
+    fun removingLastProfileStopsRuntime() {
+        assertEquals(
+            ProfileRemovalRuntimeAction.Stop,
+            profileRemovalRuntimeAction(
+                removedIndex = 0,
+                remainingProfileCount = 0,
+                runtimeProfileIndex = 0,
+                activeProfileIndex = 0,
+                uiConnectionActive = true,
+                serviceShouldRun = true,
+            ),
+        )
+    }
+
+    @Test
+    fun persistedRuntimeWithUnknownIndexRestartsConservatively() {
+        assertEquals(
+            ProfileRemovalRuntimeAction.Restart,
+            profileRemovalRuntimeAction(
+                removedIndex = 2,
+                remainingProfileCount = 2,
+                runtimeProfileIndex = null,
+                activeProfileIndex = 0,
+                uiConnectionActive = false,
+                serviceShouldRun = true,
+            ),
+        )
+    }
 }

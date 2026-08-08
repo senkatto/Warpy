@@ -14,7 +14,7 @@ import org.json.JSONObject
 import java.util.Locale
 
 private const val PROFILES_SCHEMA_VERSION_KEY = "profilesSchemaVersion"
-private const val PROFILES_SCHEMA_VERSION = 3
+private const val PROFILES_SCHEMA_VERSION = 4
 private const val PROFILES_JSON_KEY = "profilesJson"
 private const val PROFILES_JSON_BACKUP_KEY = "profilesJsonBackup"
 
@@ -68,30 +68,12 @@ internal fun migrateProfilesForSchema(
     storedSchemaVersion: Int,
 ): List<VpnProfile> {
     if (storedSchemaVersion >= PROFILES_SCHEMA_VERSION) return profiles
-    return profiles
-}
-
-internal fun groupProfiles(profiles: List<VpnProfile>): List<VpnProfile> {
-    val vlessGroups = profiles
-        .filter { it.protocol == Protocol.Vless && it.uuid.isNotBlank() }
-        .groupBy { it.uuid }
-    val passwordGroups = profiles
-        .filter {
-            (it.protocol == Protocol.Hysteria2 || it.protocol == Protocol.Trojan) &&
-                it.password.isNotBlank()
-        }
-        .groupBy { it.password }
-
     return profiles.map { profile ->
-        if (profile.group.isNotBlank()) return@map profile
-
-        val isGroup = when (profile.protocol) {
-            Protocol.Vless -> (vlessGroups[profile.uuid]?.size ?: 0) >= 3
-            Protocol.Hysteria2, Protocol.Trojan -> (passwordGroups[profile.password]?.size ?: 0) >= 3
-            else -> false
+        if (storedSchemaVersion <= 3 && profile.group == "BlancVPN") {
+            profile.copy(group = "")
+        } else {
+            profile
         }
-
-        if (isGroup) profile.copy(group = "BlancVPN") else profile
     }
 }
 
@@ -163,16 +145,11 @@ class SettingsStore(context: Context) {
             }
         }
 
-        val finalProfiles = groupProfiles(profiles)
-        if (finalProfiles != profiles) {
-            writeProfiles(finalProfiles)
-        }
-
-        val activeIndex = prefs.getInt("activeProfileIndex", 0).coerceIn(0, finalProfiles.lastIndex.coerceAtLeast(0))
+        val activeIndex = prefs.getInt("activeProfileIndex", 0).coerceIn(0, profiles.lastIndex.coerceAtLeast(0))
         val blockQuicConfigured = prefs.getBoolean("blockQuicUserConfigured", false)
 
         return AppSettings(
-            profiles = finalProfiles,
+            profiles = profiles,
             activeProfileIndex = activeIndex,
             adBlockEnabled = prefs.getBoolean("adBlockEnabled", true),
             blockQuic = if (blockQuicConfigured) prefs.getBoolean("blockQuic", false) else false,
@@ -193,12 +170,11 @@ class SettingsStore(context: Context) {
     }
 
     fun save(settings: AppSettings): Boolean {
-        val groupedProfiles = groupProfiles(settings.profiles)
-        if (!writeProfiles(groupedProfiles)) return false
+        if (!writeProfiles(settings.profiles)) return false
 
         return prefs.edit().apply {
             putInt(PROFILES_SCHEMA_VERSION_KEY, PROFILES_SCHEMA_VERSION)
-            putInt("activeProfileIndex", settings.activeProfileIndex.coerceIn(0, groupedProfiles.lastIndex.coerceAtLeast(0)))
+            putInt("activeProfileIndex", settings.activeProfileIndex.coerceIn(0, settings.profiles.lastIndex.coerceAtLeast(0)))
             putBoolean("adBlockEnabled", settings.adBlockEnabled)
             remove("youtubeFilterEnabled")
             putBoolean("blockQuic", settings.blockQuic)
@@ -231,9 +207,8 @@ class SettingsStore(context: Context) {
         return language
     }
 
-    fun markBlockQuicUserConfigured() {
+    fun markBlockQuicUserConfigured(): Boolean =
         prefs.edit().putBoolean("blockQuicUserConfigured", true).commit()
-    }
 
     private fun loadLegacyProfile(): VpnProfile? {
         val protocol = prefs.getString("protocol", null)?.let { stored ->
@@ -334,6 +309,7 @@ private fun JSONObject.toProfile(): VpnProfile = VpnProfile(
         publicKey = optString("publicKey"),
         shortId = optString("shortId"),
         fingerprint = optString("fingerprint", "chrome"),
+        alpn = optStringList("alpn"),
         allowInsecure = optBoolean("allowInsecure"),
         hysteria2ObfsType = optString("hysteria2ObfsType"),
         hysteria2ObfsPassword = optString("hysteria2ObfsPassword"),
@@ -351,6 +327,8 @@ private fun JSONObject.toProfile(): VpnProfile = VpnProfile(
         group = optString("group"),
         username = optString("username"),
         encryption = optString("encryption"),
+        plugin = optString("plugin"),
+        pluginOptions = optString("pluginOptions"),
         alterId = optInt("alterId"),
         packetEncoding = optString("packetEncoding"),
         privateKey = optString("privateKey"),
@@ -377,6 +355,7 @@ private fun VpnProfile.toJson(): JSONObject = JSONObject()
         .put("publicKey", publicKey)
         .put("shortId", shortId)
         .put("fingerprint", fingerprint)
+        .put("alpn", JSONArray(alpn))
         .put("allowInsecure", allowInsecure)
         .put("hysteria2ObfsType", hysteria2ObfsType)
         .put("hysteria2ObfsPassword", hysteria2ObfsPassword)
@@ -394,6 +373,8 @@ private fun VpnProfile.toJson(): JSONObject = JSONObject()
         .put("group", group)
         .put("username", username)
         .put("encryption", encryption)
+        .put("plugin", plugin)
+        .put("pluginOptions", pluginOptions)
         .put("alterId", alterId)
         .put("packetEncoding", packetEncoding)
         .put("privateKey", privateKey)
@@ -405,3 +386,9 @@ private fun VpnProfile.toJson(): JSONObject = JSONObject()
         .put("congestionControl", congestionControl)
         .put("udpRelayMode", udpRelayMode)
         .put("raw", raw)
+
+private fun JSONObject.optStringList(name: String): List<String> = when (val value = opt(name)) {
+    is JSONArray -> List(value.length()) { index -> value.optString(index) }
+    is String -> value.split(',')
+    else -> emptyList()
+}.map(String::trim).filter(String::isNotBlank)

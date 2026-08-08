@@ -234,7 +234,7 @@ object SingBoxConfigBuilder {
             .put("server_port", port)
             .put("uuid", uuid)
             .put("flow", flow.takeIf { it.isNotBlank() })
-            .put("packet_encoding", "xudp")
+            .put("packet_encoding", packetEncoding.ifBlank { "xudp" })
             .put("tls", tlsForVless())
             .apply {
                 if (multiplex) {
@@ -314,6 +314,10 @@ object SingBoxConfigBuilder {
             .put("server_port", port)
             .put("method", encryption)
             .put("password", password)
+            .apply {
+                if (plugin.isNotBlank()) put("plugin", plugin)
+                if (pluginOptions.isNotBlank()) put("plugin_opts", pluginOptions)
+            }
 
         Protocol.Socks -> JSONObject()
             .put("type", "socks")
@@ -374,6 +378,9 @@ object SingBoxConfigBuilder {
             .put("server_name", sni.ifBlank { server })
             .put("insecure", allowInsecure)
             .put("utls", JSONObject().put("enabled", true).put("fingerprint", fingerprint))
+            .apply {
+                if (alpn.isNotEmpty()) put("alpn", alpn.toJsonArray())
+            }
     }
 
     private fun splitValues(value: String): JSONArray = value
@@ -395,6 +402,8 @@ object SingBoxConfigBuilder {
             .put("server_name", sni.ifBlank { server })
             .put("utls", JSONObject().put("enabled", true).put("fingerprint", fingerprint))
 
+        if (alpn.isNotEmpty()) tls.put("alpn", alpn.toJsonArray())
+
         if (security.equals("reality", true)) {
             tls.put(
                 "reality",
@@ -411,7 +420,7 @@ object SingBoxConfigBuilder {
         .put("enabled", true)
         .put("server_name", sni.ifBlank { server })
         .put("insecure", allowInsecure)
-        .put("alpn", JSONArray().put("h3"))
+        .put("alpn", (alpn.ifEmpty { listOf("h3") }).toJsonArray())
 
     private fun VpnProfile.tlsForTrojan(): JSONObject = JSONObject()
         .put("enabled", true)
@@ -419,6 +428,7 @@ object SingBoxConfigBuilder {
         .put("insecure", allowInsecure)
         .put("utls", JSONObject().put("enabled", true).put("fingerprint", fingerprint))
         .apply {
+            if (alpn.isNotEmpty()) put("alpn", alpn.toJsonArray())
             if (security.equals("reality", true)) {
                 put(
                     "reality",
@@ -438,7 +448,14 @@ object SingBoxConfigBuilder {
         xhttpMode: String,
     ): JSONObject? {
         if (transport.isBlank()) return null
-        return when (transport.lowercase()) {
+        val normalizedTransport = when (val value = transport.trim().lowercase()) {
+            "h2" -> "http"
+            "http-upgrade", "http_upgrade" -> "httpupgrade"
+            "splithttp", "split-http", "split_http" -> "xhttp"
+            else -> value
+        }
+        return when (normalizedTransport) {
+            "tcp", "raw" -> null
             "ws" -> JSONObject()
                 .put("type", "ws")
                 .put("path", path.ifBlank { "/" })
@@ -452,23 +469,28 @@ object SingBoxConfigBuilder {
                 .put("service_name", serviceName)
             "xhttp" -> JSONObject()
                 .put("type", "xhttp")
-                .put("mode", xhttpMode.androidCompatibleXhttpMode())
+                .put("mode", xhttpMode.ifBlank { CoreContract.Android.xhttpDefaultMode }.lowercase())
                 .put("path", path.ifBlank { "/" })
                 .apply {
                     if (host.isNotBlank()) {
                         put("host", host)
                     }
                 }
-            else -> null
+            "http" -> JSONObject()
+                .put("type", "http")
+                .put("path", path.ifBlank { "/" })
+                .apply {
+                    if (host.isNotBlank()) put("host", JSONArray().put(host))
+                }
+            "httpupgrade" -> JSONObject()
+                .put("type", "httpupgrade")
+                .put("path", path.ifBlank { "/" })
+                .apply {
+                    if (host.isNotBlank()) put("host", host)
+                }
+            else -> throw IllegalArgumentException("Unsupported transport: $transport")
         }
     }
-
-    private fun String.androidCompatibleXhttpMode(): String =
-        if (isBlank() || equals("stream-up", ignoreCase = true)) {
-            CoreContract.Android.xhttpDefaultMode
-        } else {
-            lowercase()
-        }
 
     private fun Iterable<String>.toJsonArray(): JSONArray =
         fold(JSONArray()) { array, value -> array.put(value) }

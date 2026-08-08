@@ -3,14 +3,12 @@ package com.warpy.app.vpn.session
 import com.warpy.app.model.VpnState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 internal data class SessionValidationResult(
     val succeeded: Boolean,
-    val runtimeProfileTag: String? = null,
     val message: String? = null,
     val recoverable: Boolean = false,
 )
@@ -25,12 +23,6 @@ internal sealed interface ConnectionRecoveryResult {
     data class Succeeded(val runtimeProfileTag: String) : ConnectionRecoveryResult
     data class Deferred(val message: String) : ConnectionRecoveryResult
     data class Exhausted(val message: String) : ConnectionRecoveryResult
-}
-
-internal sealed interface PreferredRetryResult {
-    data class Succeeded(val runtimeProfileTag: String) : PreferredRetryResult
-    data object RolledBack : PreferredRetryResult
-    data class Failed(val message: String) : PreferredRetryResult
 }
 
 internal interface VpnSessionOperations {
@@ -49,12 +41,6 @@ internal interface VpnSessionOperations {
         generation: Long,
         request: RecoveryRequest,
     ): ConnectionRecoveryResult
-    suspend fun retryPreferredOutbound(
-        generation: Long,
-        preferredProfileTag: String,
-        runtimeProfileTag: String,
-    ): PreferredRetryResult
-
     fun cancelOperations(generation: Long)
 }
 
@@ -63,7 +49,6 @@ internal class VpnSessionRuntime(
     reducer: VpnSessionReducer,
     initialSnapshot: VpnSessionSnapshot = VpnSessionSnapshot(),
     private val operations: VpnSessionOperations,
-    private val preferredRetryDelayMillis: Long = 300_000L,
     onSnapshotChanged: (VpnSessionSnapshot) -> Unit = {},
 ) {
     private val runtimeScope = scope
@@ -72,8 +57,6 @@ internal class VpnSessionRuntime(
     private val validationJobOwner = CancellableJobOwner(scope)
     private val switchJobOwner = CancellableJobOwner(scope)
     private val recoveryJobOwner = CancellableJobOwner(scope)
-    private val preferredRetryTimerOwner = CancellableJobOwner(scope)
-    private val preferredRetryOperationOwner = CancellableJobOwner(scope)
     private val controller = VpnSessionController(
         initialSnapshot = initialSnapshot,
         reducer = reducer,
@@ -92,8 +75,6 @@ internal class VpnSessionRuntime(
         validationJobOwner.cancel()
         switchJobOwner.cancel()
         recoveryJobOwner.cancel()
-        preferredRetryTimerOwner.cancel()
-        preferredRetryOperationOwner.cancel()
         controller.close()
     }
 
@@ -103,8 +84,6 @@ internal class VpnSessionRuntime(
             validationJobOwner.cancel()
             switchJobOwner.cancel()
             recoveryJobOwner.cancel()
-            preferredRetryTimerOwner.cancel()
-            preferredRetryOperationOwner.cancel()
             operations.cancelOperations(effect.generation)
         }
 
@@ -132,13 +111,6 @@ internal class VpnSessionRuntime(
             launchRecovery(effect)
         }
 
-        effects.filterIsInstance<VpnSessionEffect.SchedulePreferredRetry>().forEach { effect ->
-            schedulePreferredRetry(effect)
-        }
-
-        effects.filterIsInstance<VpnSessionEffect.RetryPreferredOutbound>().forEach { effect ->
-            launchPreferredRetry(effect)
-        }
     }
 
     private fun launchResourceTransaction(
@@ -193,8 +165,7 @@ internal class VpnSessionRuntime(
             if (!isCurrent(effect.generation)) return@launch
 
             if (result.succeeded) {
-                val runtimeProfileTag = result.runtimeProfileTag
-                    ?: snapshot().preferredProfileTag
+                val runtimeProfileTag = snapshot().preferredProfileTag
                     ?: return@launch
                 controller.dispatch(
                     VpnSessionEvent.ValidationSucceeded(
@@ -256,8 +227,6 @@ internal class VpnSessionRuntime(
     }
 
     private fun launchRecovery(effect: VpnSessionEffect.RecoverConnection) {
-        preferredRetryTimerOwner.cancel()
-        preferredRetryOperationOwner.cancel()
         recoveryJobOwner.launch {
             val result = try {
                 operations.recoverConnection(effect.generation, effect.request)
@@ -288,51 +257,6 @@ internal class VpnSessionRuntime(
                         generation = effect.generation,
                         message = result.message,
                         stop = effect.request.stopOnExhaustion,
-                    ),
-                )
-            }
-        }
-    }
-
-    private fun schedulePreferredRetry(effect: VpnSessionEffect.SchedulePreferredRetry) {
-        preferredRetryTimerOwner.launch {
-            delay(preferredRetryDelayMillis)
-            if (!isCurrent(effect.generation)) return@launch
-            controller.dispatch(VpnSessionEvent.PreferredRetryDue(effect.generation))
-        }
-    }
-
-    private fun launchPreferredRetry(effect: VpnSessionEffect.RetryPreferredOutbound) {
-        preferredRetryOperationOwner.launch {
-            val result = try {
-                operations.retryPreferredOutbound(
-                    generation = effect.generation,
-                    preferredProfileTag = effect.preferredProfileTag,
-                    runtimeProfileTag = effect.runtimeProfileTag,
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                PreferredRetryResult.Failed(
-                    error.message ?: "Preferred VPN profile retry failed",
-                )
-            }
-            if (!isCurrent(effect.generation)) return@launch
-
-            when (result) {
-                is PreferredRetryResult.Succeeded -> controller.dispatch(
-                    VpnSessionEvent.PreferredRetrySucceeded(
-                        generation = effect.generation,
-                        runtimeProfileTag = result.runtimeProfileTag,
-                    ),
-                )
-                PreferredRetryResult.RolledBack -> controller.dispatch(
-                    VpnSessionEvent.PreferredRetryRolledBack(effect.generation),
-                )
-                is PreferredRetryResult.Failed -> controller.dispatch(
-                    VpnSessionEvent.CoreDied(
-                        generation = effect.generation,
-                        message = result.message,
                     ),
                 )
             }

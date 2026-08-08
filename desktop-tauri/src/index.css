@@ -382,18 +382,6 @@ textarea:focus{border-color:#00c07f}
 }
 .settings-section{display:flex;flex-direction:column;padding:0 0 18px;margin:0 0 18px;border-bottom:1px solid rgba(255,255,255,.08)}
 .settings-section-title{margin-bottom:8px;color:#00c07f;font-size:10px;font-weight:700;text-transform:uppercase}
-.connection-check{display:flex;align-items:center;gap:12px;min-height:64px;margin-bottom:4px;padding:10px 10px 10px 12px;border-radius:14px;background:#151517}
-.connection-check-copy{display:flex;flex:1;min-width:0;flex-direction:column;gap:3px}
-.connection-check-title{color:rgba(255,255,255,.94);font-size:13px;font-weight:650}
-.connection-check-status{color:rgba(255,255,255,.42);font-size:10px;line-height:14px}
-.connection-check-status[data-state="checking"]{color:rgba(255,255,255,.65)}
-.connection-check-status[data-state="success"]{color:#00c07f}
-.connection-check-status[data-state="warning"]{color:#ffb34d}
-.connection-check-status[data-state="error"]{color:#ff6b70}
-.connection-check-btn{min-width:82px;height:34px;padding:0 12px;border:0;border-radius:10px;background:#f2f2f0;color:#101012;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;transition:background .15s,transform .15s,opacity .15s}
-.connection-check-btn:hover{background:#fff}
-.connection-check-btn:active:not(:disabled){transform:scale(.97)}
-.connection-check-btn:disabled{cursor:default;opacity:.5}
 .setting{display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:48px;cursor:pointer;padding:9px 2px;border-bottom:1px solid rgba(255,255,255,.055)}
 .setting:last-child{border-bottom:0}
 .setting-rich{align-items:center}
@@ -525,25 +513,6 @@ textarea:focus{border-color:#00c07f}
 .language-options button.active .language-check{visibility:visible}
 
 /* Connection diagnostic report */
-.dialog-connection-report{width:338px;padding:20px}
-.connection-report-summary{margin-top:14px;color:rgba(255,255,255,.95);font-size:19px;font-weight:700;line-height:24px}
-.connection-report-summary[data-state="stable"]{color:#65d9a4}
-.connection-report-summary[data-state="impaired"]{color:#f0c36b}
-.connection-report-summary[data-state="poor"]{color:#f08d91}
-.connection-report-detail{margin-top:5px;color:rgba(255,255,255,.48);font-size:11px;line-height:16px;text-wrap:pretty}
-.connection-report-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:16px}
-.connection-report-metric{display:flex;min-width:0;flex-direction:column;gap:4px;padding:10px 11px;border-radius:10px;background:rgba(255,255,255,.045)}
-.connection-report-metric-label{color:rgba(255,255,255,.38);font-size:9px;font-weight:650;text-transform:uppercase}
-.connection-report-metric-value{color:rgba(255,255,255,.94);font-size:15px;font-variant-numeric:tabular-nums}
-.connection-report-section-title{margin-top:17px;color:rgba(255,255,255,.38);font-size:9px;font-weight:700;text-transform:uppercase}
-.connection-report-recommendations{display:flex;flex-direction:column;gap:7px;margin-top:8px}
-.connection-report-recommendation{display:grid;grid-template-columns:18px minmax(0,1fr);column-gap:7px;row-gap:2px;padding:10px 11px;border-radius:10px;background:rgba(255,255,255,.045)}
-.connection-report-recommendation-mark{grid-row:1 / span 2;color:#65d9a4;font-size:13px;font-weight:700;line-height:16px}
-.connection-report-recommendation-title{color:rgba(255,255,255,.9);font-size:11px;line-height:16px}
-.connection-report-recommendation-copy{color:rgba(255,255,255,.4);font-size:9px;line-height:13px}
-.connection-report-empty{padding:10px 11px;border-radius:10px;background:rgba(101,217,164,.07);color:rgba(101,217,164,.82);font-size:10px;line-height:14px}
-.connection-report-actions{margin-top:18px}
-.connection-report-actions button{min-height:40px}
 .speedtest-res-val{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff}
 .speedtest-res-unit{font-size:14px;color:#fff;align-self:end;padding-bottom:2px}
 
@@ -629,7 +598,6 @@ textarea:focus{border-color:#00c07f}
 .diagnostics-status[data-state="error"]{color:rgba(255,91,97,.86)}
 @keyframes diagnostics-pulse{to{opacity:.35;transform:translateY(2px)}}
 
-.update-channel-row{cursor:default}
 .update-check{
   width:100%;
   min-height:40px;

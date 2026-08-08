@@ -1,5 +1,4 @@
-// Vendored from js-yaml 4.3.0 (MIT); see js-yaml.LICENSE.txt.
-
+// Vendored from js-yaml 4.3.1 (https://github.com/nodeca/js-yaml).
 function getDefaultExportFromCjs(x) {
   return x && x.__esModule && Object.prototype.hasOwnProperty.call(x, "default") ? x["default"] : x;
 }
@@ -860,7 +859,7 @@ function requireOmap() {
   const _toString = Object.prototype.toString;
   function resolveYamlOmap(data) {
     if (data === null) return true;
-    const objectKeys = [];
+    const objectKeys = {};
     const object = data;
     for (let index = 0, length = object.length; index < length; index += 1) {
       const pair = object[index];
@@ -874,8 +873,8 @@ function requireOmap() {
         }
       }
       if (!pairHasKey) return false;
-      if (objectKeys.indexOf(pairKey) === -1) objectKeys.push(pairKey);
-      else return false;
+      if (_hasOwnProperty.call(objectKeys, pairKey)) return false;
+      Object.defineProperty(objectKeys, pairKey, { value: true });
     }
     return true;
   }
@@ -3073,3 +3072,4 @@ export {
   safeLoadAll,
   types
 };
+//# sourceMappingURL=js-yaml.mjs.map

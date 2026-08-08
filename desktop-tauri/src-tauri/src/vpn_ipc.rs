@@ -56,31 +56,12 @@ pub(crate) enum VpnRequest {
     StartedAt,
     Diagnostics,
     NetworkStats,
-    Health,
     KillSwitchStatus,
-    AttachUi {
-        process_id: u32,
-    },
-    SetAutostart {
-        enabled: bool,
-    },
-    SetAutoMode {
-        enabled: bool,
-    },
-    SetPreferredOutbound {
-        outbound: String,
-    },
-    ForgetOutbound {
-        outbound: String,
-    },
-    Start {
-        config: String,
-        kill_switch: bool,
-        auto_mode: bool,
-    },
-    SwitchOutbound {
-        outbound: String,
-    },
+    AttachUi { process_id: u32 },
+    SetAutostart { enabled: bool },
+    ForgetOutbound { outbound: String },
+    Start { config: String, kill_switch: bool },
+    SwitchOutbound { outbound: String },
     Stop,
 }
 
@@ -150,12 +131,10 @@ fn call_named(
 fn response_timeout(request: &VpnRequest) -> Duration {
     match request {
         VpnRequest::Start { .. } => START_RESPONSE_TIMEOUT,
-        VpnRequest::SwitchOutbound { .. }
-        | VpnRequest::SetPreferredOutbound { .. }
-        | VpnRequest::ForgetOutbound { .. } => Duration::from_secs(8),
-        VpnRequest::Stop | VpnRequest::SetAutostart { .. } | VpnRequest::SetAutoMode { .. } => {
-            Duration::from_secs(10)
+        VpnRequest::SwitchOutbound { .. } | VpnRequest::ForgetOutbound { .. } => {
+            Duration::from_secs(8)
         }
+        VpnRequest::Stop | VpnRequest::SetAutostart { .. } => Duration::from_secs(10),
         _ => IO_TIMEOUT,
     }
 }
@@ -535,7 +514,6 @@ mod tests {
         let request = VpnRequest::Start {
             config: r#"{"inbounds":[],"outbounds":[]}"#.to_string(),
             kill_switch: true,
-            auto_mode: true,
         };
         let encoded = serde_json::to_vec(&request).expect("serialize request");
         let decoded: VpnRequest = serde_json::from_slice(&encoded).expect("deserialize request");
@@ -543,11 +521,9 @@ mod tests {
             VpnRequest::Start {
                 config,
                 kill_switch,
-                auto_mode,
             } => {
                 assert!(config.contains("outbounds"));
                 assert!(kill_switch);
-                assert!(auto_mode);
             }
             _ => panic!("wrong request kind"),
         }
@@ -558,7 +534,6 @@ mod tests {
         let request = VpnRequest::Start {
             config: "{}".to_string(),
             kill_switch: false,
-            auto_mode: false,
         };
         assert_eq!(response_timeout(&request), START_RESPONSE_TIMEOUT);
         assert!(response_timeout(&request) > std::time::Duration::from_secs(30));
@@ -576,27 +551,6 @@ mod tests {
     }
 
     #[test]
-    fn auto_mode_request_round_trip_preserves_policy() {
-        let encoded = serde_json::to_vec(&VpnRequest::SetAutoMode { enabled: true })
-            .expect("serialize request");
-        let decoded: VpnRequest = serde_json::from_slice(&encoded).expect("deserialize request");
-        assert!(matches!(decoded, VpnRequest::SetAutoMode { enabled: true }));
-    }
-
-    #[test]
-    fn preferred_outbound_request_round_trip_preserves_target() {
-        let encoded = serde_json::to_vec(&VpnRequest::SetPreferredOutbound {
-            outbound: "profile-3".to_string(),
-        })
-        .expect("serialize request");
-        let decoded: VpnRequest = serde_json::from_slice(&encoded).expect("deserialize request");
-        assert!(matches!(
-            decoded,
-            VpnRequest::SetPreferredOutbound { outbound } if outbound == "profile-3"
-        ));
-    }
-
-    #[test]
     fn selector_request_round_trip_preserves_outbound() {
         let encoded = serde_json::to_vec(&VpnRequest::SwitchOutbound {
             outbound: "profile-2".to_string(),
@@ -607,13 +561,6 @@ mod tests {
             decoded,
             VpnRequest::SwitchOutbound { outbound } if outbound == "profile-2"
         ));
-    }
-
-    #[test]
-    fn health_request_round_trip_keeps_command() {
-        let encoded = serde_json::to_vec(&VpnRequest::Health).expect("serialize request");
-        let decoded: VpnRequest = serde_json::from_slice(&encoded).expect("deserialize request");
-        assert!(matches!(decoded, VpnRequest::Health));
     }
 
     #[test]

@@ -1,11 +1,39 @@
 package com.warpy.app.updates
 
+import java.io.ByteArrayInputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import org.json.JSONArray
 
 class WarpyUpdaterTest {
+    @Test
+    fun boundsReleaseFeedWithAndWithoutContentLength() {
+        val exact = ByteArray(MAX_RELEASE_FEED_BYTES.toInt()) { 'x'.code.toByte() }
+        assertEquals(
+            exact.size,
+            readUpdateFeed(ByteArrayInputStream(exact), exact.size.toLong()).length,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            readUpdateFeed(ByteArrayInputStream(byteArrayOf()), MAX_RELEASE_FEED_BYTES + 1)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            readUpdateFeed(
+                ByteArrayInputStream(ByteArray(MAX_RELEASE_FEED_BYTES.toInt() + 1)),
+                -1,
+            )
+        }
+    }
+
+    @Test
+    fun rejectsOversizedUpdateDownloads() {
+        requireUpdateSize(MAX_UPDATE_APK_BYTES)
+        assertFailsWith<IllegalArgumentException> {
+            requireUpdateSize(MAX_UPDATE_APK_BYTES + 1)
+        }
+    }
+
     @Test
     fun selectsNewestStableReleaseThatContainsAndroidInstaller() {
         val releases = JSONArray(

@@ -145,7 +145,6 @@ jobs:
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
-          RELEASE_CHANNEL: stable
         run: .\scripts\prepare-release-assets.ps1
 
       - name: Upload Windows release assets

@@ -1,4 +1,5 @@
 import { parseProfileLink } from './vpn-config.js';
+import { CORE_CONTRACT } from './generated/core-contract.js';
 import { JSON_SCHEMA, load as loadYaml } from './vendor/js-yaml.mjs';
 
 export const MAX_SUBSCRIPTION_TEXT_LENGTH = 2 * 1024 * 1024;
@@ -20,8 +21,16 @@ const CLASH_NETWORKS = new Map([
   ['h2', 'http'],
   ['httpupgrade', 'httpupgrade'],
   ['http-upgrade', 'httpupgrade'],
+  ['http_upgrade', 'httpupgrade'],
   ['xhttp', 'xhttp'],
+  ['splithttp', 'xhttp'],
+  ['split-http', 'xhttp'],
+  ['split_http', 'xhttp'],
 ]);
+
+function normalizeTransport(value) {
+  return CLASH_NETWORKS.get(stringValue(value).toLowerCase()) || stringValue(value).toLowerCase();
+}
 
 function normalizePayload(value) {
   const text = String(value ?? '').replace(/^\uFEFF/, '').trim();
@@ -60,7 +69,8 @@ function stringValue(value) {
 }
 
 function secretValue(value) {
-  return typeof value === 'string' ? value : '';
+  if (typeof value === 'string') return value;
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
 }
 
 function headerValue(headers, name) {
@@ -95,10 +105,18 @@ function stringList(value) {
   return single ? [single] : [];
 }
 
+function scalarList(value) {
+  const source = Array.isArray(value) ? value : [value];
+  return source
+    .filter(item => typeof item === 'string' || typeof item === 'number')
+    .map(item => String(item).trim())
+    .filter(Boolean);
+}
+
 function firstSecret(source, keys, trim = false) {
   for (const key of keys) {
-    const value = propertyValue(source, [key]);
-    if (typeof value !== 'string') continue;
+    const value = secretValue(propertyValue(source, [key]));
+    if (!value) continue;
     const normalized = trim ? value.trim() : value;
     if (normalized) return normalized;
   }
@@ -115,87 +133,127 @@ function singBoxOutboundToProfile(value) {
   const outbound = objectValue(value);
   if (!outbound) return null;
   const protocol = stringValue(outbound.type).toLowerCase();
-  const host = stringValue(outbound.server);
-  const port = Number(outbound.server_port);
-  const credential = protocol === 'vless'
-    ? stringValue(outbound.uuid)
-    : secretValue(outbound.password);
+  const peer = Array.isArray(outbound.peers) ? objectValue(outbound.peers[0]) : null;
+  const host = stringValue(outbound.server) || stringValue(peer?.address);
+  const port = Number(outbound.server_port || peer?.port);
   if (
     !SING_BOX_PROTOCOLS.has(protocol) ||
     !host ||
     !Number.isInteger(port) ||
     port < 1 ||
-    port > 65535 ||
-    !credential
+    port > 65535
   ) return null;
 
-  const hostForUrl = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-  let url;
-  try {
-    url = new URL(`${protocol}://placeholder@${hostForUrl}:${port}`);
-  } catch {
-    return null;
-  }
-  url.username = credential;
-  const query = url.searchParams;
+  const profile = {
+    protocol,
+    name: singBoxProfileName(outbound, protocol, host),
+    host,
+    port,
+    raw: '',
+  };
+
   const tls = objectValue(outbound.tls);
   const reality = objectValue(tls?.reality);
   if (reality?.enabled === true && stringValue(reality.public_key)) {
-    query.set('security', 'reality');
-    query.set('pbk', stringValue(reality.public_key));
-    const shortId = stringValue(reality.short_id);
-    if (shortId) query.set('sid', shortId);
+    profile.security = 'reality';
+    profile.pbk = stringValue(reality.public_key);
+    profile.sid = stringValue(reality.short_id);
   } else if (tls?.enabled === true) {
-    query.set('security', 'tls');
+    profile.security = 'tls';
   }
   const serverName = stringValue(tls?.server_name);
-  if (serverName) query.set('sni', serverName);
-  if (tls?.insecure === true) query.set('insecure', '1');
+  if (serverName) profile.sni = serverName;
+  profile.insecure = tls?.insecure === true;
   const alpn = Array.isArray(tls?.alpn) ? tls.alpn.map(stringValue).filter(Boolean) : [];
-  if (alpn.length) query.set('alpn', alpn.join(','));
+  if (alpn.length) profile.alpn = alpn;
   const fingerprint = stringValue(objectValue(tls?.utls)?.fingerprint);
-  if (fingerprint) query.set('fp', fingerprint);
-
-  if (protocol === 'vless') {
-    const flow = stringValue(outbound.flow);
-    const packetEncoding = stringValue(outbound.packet_encoding);
-    if (flow) query.set('flow', flow);
-    if (packetEncoding) query.set('packetEncoding', packetEncoding);
-  }
+  if (fingerprint) profile.fp = fingerprint;
 
   const transport = objectValue(outbound.transport);
-  const transportType = stringValue(transport?.type).toLowerCase();
+  const transportType = normalizeTransport(transport?.type);
   if (transportType && !SING_BOX_TRANSPORTS.has(transportType)) return null;
-  if (transportType && SING_BOX_TRANSPORTS.has(transportType) && transportType !== 'tcp') {
-    query.set('type', transportType);
-    const path = stringValue(transport.path);
-    if (path) query.set('path', path);
+  if (transportType && !['vless', 'trojan', 'vmess'].includes(protocol)) return null;
+  if (['vless', 'trojan', 'vmess'].includes(protocol)) {
+    profile.transport = transportType || 'tcp';
+    const path = stringValue(transport?.path);
+    if (path) profile.path = path;
     if (transportType === 'grpc') {
-      const serviceName = stringValue(transport.service_name);
-      if (serviceName) query.set('serviceName', serviceName);
+      const serviceName = stringValue(transport?.service_name);
+      if (serviceName) profile.serviceName = serviceName;
     } else {
       if (transportType === 'xhttp') {
-        const mode = stringValue(transport.mode);
-        query.set('mode', ['stream-up', 'stream-one', 'packet-up'].includes(mode) ? mode : 'stream-up');
+        const mode = stringValue(transport?.mode);
+        profile.xhttpMode = ['stream-up', 'stream-one', 'packet-up'].includes(mode)
+          ? mode
+          : CORE_CONTRACT.platforms.windows.xhttpDefaultMode;
       }
-      const hostHeader = headerValue(transport.headers, 'host')
-        || (Array.isArray(transport.host) ? stringValue(transport.host[0]) : stringValue(transport.host));
-      if (hostHeader) query.set('host', hostHeader);
+      const hostHeader = headerValue(transport?.headers, 'host')
+        || (Array.isArray(transport?.host) ? stringValue(transport.host[0]) : stringValue(transport?.host));
+      if (hostHeader) profile.hostHeader = hostHeader;
     }
   }
 
-  if (protocol === 'hysteria2') {
+  if (protocol === 'vless') {
+    profile.uuid = stringValue(outbound.uuid);
+    profile.flow = stringValue(outbound.flow);
+    profile.packetEncoding = stringValue(outbound.packet_encoding);
+    if (!profile.uuid) return null;
+  } else if (protocol === 'trojan') {
+    profile.uuid = secretValue(outbound.password);
+    if (!profile.uuid) return null;
+  } else if (protocol === 'hysteria2') {
+    profile.uuid = secretValue(outbound.password);
+    if (!profile.uuid) return null;
     const obfs = objectValue(outbound.obfs);
     const obfsType = stringValue(obfs?.type);
     const obfsPassword = secretValue(obfs?.password);
     if (obfsType && obfsPassword) {
-      query.set('obfs', obfsType);
-      query.set('obfs-password', obfsPassword);
+      profile.obfsType = obfsType;
+      profile.obfsPassword = obfsPassword;
     }
+    profile.serverPorts = stringList(outbound.server_ports).join(',');
+    profile.hopInterval = stringValue(outbound.hop_interval);
+    profile.hopIntervalMax = stringValue(outbound.hop_interval_max);
+    profile.upMbps = Number(outbound.up_mbps) || 0;
+    profile.downMbps = Number(outbound.down_mbps) || 0;
+  } else if (protocol === 'vmess') {
+    profile.uuid = stringValue(outbound.uuid);
+    profile.encryption = stringValue(outbound.security) || 'auto';
+    profile.alterId = Number(outbound.alter_id) || 0;
+    profile.packetEncoding = stringValue(outbound.packet_encoding);
+    if (!profile.uuid) return null;
+  } else if (protocol === 'shadowsocks') {
+    profile.encryption = stringValue(outbound.method);
+    profile.password = secretValue(outbound.password);
+    profile.plugin = stringValue(outbound.plugin);
+    profile.pluginOptions = stringValue(outbound.plugin_opts);
+    if (!profile.encryption || !profile.password) return null;
+    if (profile.plugin && !['obfs-local', 'v2ray-plugin'].includes(profile.plugin)) return null;
+  } else if (protocol === 'socks') {
+    profile.username = stringValue(outbound.username);
+    profile.password = secretValue(outbound.password);
+  } else if (protocol === 'wireguard') {
+    profile.privateKey = secretValue(outbound.private_key);
+    profile.peerPublicKey = stringValue(outbound.peer_public_key) || stringValue(peer?.public_key);
+    profile.preSharedKey = secretValue(outbound.pre_shared_key) || secretValue(peer?.pre_shared_key);
+    profile.localAddress = stringList(outbound.local_address || outbound.address).join(',');
+    profile.reserved = scalarList(outbound.reserved || peer?.reserved).join(',');
+    profile.mtu = Number(outbound.mtu) || 0;
+    if (!profile.privateKey || !profile.peerPublicKey || !profile.localAddress) return null;
+  } else if (protocol === 'tuic') {
+    profile.uuid = stringValue(outbound.uuid);
+    profile.password = secretValue(outbound.password);
+    profile.congestionControl = stringValue(outbound.congestion_control) || 'cubic';
+    profile.udpRelayMode = stringValue(outbound.udp_relay_mode) || 'native';
+    if (!profile.uuid) return null;
+  } else if (protocol === 'hysteria') {
+    profile.uuid = secretValue(outbound.auth_str) || secretValue(outbound.auth);
+    profile.obfsPassword = secretValue(outbound.obfs);
+    profile.upMbps = Number(outbound.up_mbps) || 0;
+    profile.downMbps = Number(outbound.down_mbps) || 0;
   }
 
-  url.hash = singBoxProfileName(outbound, protocol, host);
-  return parseProfileLink(url.href);
+  return profile;
 }
 
 function parseSingBoxJson(value) {
@@ -205,8 +263,14 @@ function parseSingBoxJson(value) {
   } catch {
     return null;
   }
-  const outbounds = Array.isArray(config) ? config : objectValue(config)?.outbounds;
-  if (!Array.isArray(outbounds)) return null;
+  const root = objectValue(config);
+  const outbounds = Array.isArray(config)
+    ? config
+    : [
+      ...(Array.isArray(root?.outbounds) ? root.outbounds : []),
+      ...(Array.isArray(root?.endpoints) ? root.endpoints : []),
+    ];
+  if (!outbounds.length) return null;
 
   const profiles = [];
   const seen = new Set();
@@ -285,78 +349,134 @@ function clashProxyToProfile(value) {
   const proxy = objectValue(value);
   if (!proxy) return null;
   const rawType = stringValue(propertyValue(proxy, ['type'])).toLowerCase();
-  const protocol = rawType === 'hy2' ? 'hysteria2' : rawType;
+  const protocol = ({ hy2: 'hysteria2', ss: 'shadowsocks', socks5: 'socks', wg: 'wireguard' })[rawType]
+    || rawType;
   const host = stringValue(propertyValue(proxy, ['server']));
   const port = Number(propertyValue(proxy, ['port']));
-  const credential = protocol === 'vless'
-    ? firstSecret(proxy, ['uuid'], true)
-    : firstSecret(proxy, protocol === 'hysteria2'
-      ? ['password', 'auth', 'auth-str', 'auth_str']
-      : ['password']);
   if (
     !SING_BOX_PROTOCOLS.has(protocol) ||
     !host ||
     !Number.isInteger(port) ||
     port < 1 ||
-    port > 65535 ||
-    !credential
+    port > 65535
   ) return null;
 
-  const hostForUrl = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
-  let url;
-  try {
-    url = new URL(`${protocol}://placeholder@${hostForUrl}:${port}`);
-  } catch {
-    return null;
-  }
-  url.username = credential;
-  const query = url.searchParams;
+  const profile = {
+    protocol,
+    name: clashProfileName(proxy, protocol, host),
+    host,
+    port,
+    raw: '',
+  };
   const reality = propertyObject(proxy, ['reality-opts', 'reality_opts']);
   const publicKey = stringValue(propertyValue(reality, ['public-key', 'public_key']));
   if (publicKey) {
-    query.set('security', 'reality');
-    query.set('pbk', publicKey);
+    profile.security = 'reality';
+    profile.pbk = publicKey;
     const shortId = stringValue(propertyValue(reality, ['short-id', 'short_id']));
-    if (shortId) query.set('sid', shortId);
-  } else if (propertyValue(proxy, ['tls']) === true || protocol !== 'vless') {
-    query.set('security', 'tls');
+    if (shortId) profile.sid = shortId;
+  } else if (
+    propertyValue(proxy, ['tls']) === true ||
+    ['trojan', 'hysteria2', 'tuic', 'hysteria'].includes(protocol)
+  ) {
+    profile.security = 'tls';
   }
 
   const serverName = stringValue(propertyValue(proxy, ['servername', 'server-name', 'sni', 'peer']));
-  if (serverName) query.set('sni', serverName);
-  if (propertyValue(proxy, ['skip-cert-verify', 'skip_cert_verify']) === true) {
-    query.set('insecure', '1');
-  }
+  if (serverName) profile.sni = serverName;
+  profile.insecure = propertyValue(proxy, ['skip-cert-verify', 'skip_cert_verify']) === true;
   const alpn = stringList(propertyValue(proxy, ['alpn']));
-  if (alpn.length) query.set('alpn', alpn.join(','));
+  if (alpn.length) profile.alpn = alpn;
   const fingerprint = stringValue(propertyValue(proxy, [
     'client-fingerprint',
     'client_fingerprint',
     'fingerprint',
   ]));
-  if (fingerprint) query.set('fp', fingerprint);
+  if (fingerprint) profile.fp = fingerprint;
+
+  const transportQuery = new URLSearchParams();
+  if (!applyClashTransport(proxy, protocol, transportQuery)) return null;
+  profile.transport = transportQuery.get('type') || 'tcp';
+  profile.path = transportQuery.get('path') || '';
+  profile.serviceName = transportQuery.get('serviceName') || '';
+  profile.xhttpMode = transportQuery.get('mode') || '';
+  profile.hostHeader = transportQuery.get('host') || '';
 
   if (protocol === 'vless') {
-    const flow = stringValue(propertyValue(proxy, ['flow']));
-    const packetEncoding = stringValue(propertyValue(proxy, ['packet-encoding', 'packet_encoding']));
-    if (flow) query.set('flow', flow);
-    if (packetEncoding) query.set('packetEncoding', packetEncoding);
-  }
-  if (!applyClashTransport(proxy, protocol, query)) return null;
-
-  if (protocol === 'hysteria2') {
+    profile.uuid = firstSecret(proxy, ['uuid'], true);
+    profile.flow = stringValue(propertyValue(proxy, ['flow']));
+    profile.packetEncoding = stringValue(propertyValue(proxy, ['packet-encoding', 'packet_encoding']));
+    if (!profile.uuid) return null;
+  } else if (protocol === 'trojan') {
+    profile.uuid = firstSecret(proxy, ['password']);
+    if (!profile.uuid) return null;
+  } else if (protocol === 'hysteria2') {
+    profile.uuid = firstSecret(proxy, ['password', 'auth', 'auth-str', 'auth_str']);
+    if (!profile.uuid) return null;
     const obfsObject = objectValue(propertyValue(proxy, ['obfs']));
     const obfsType = stringValue(obfsObject?.type || propertyValue(proxy, ['obfs']));
     const obfsPassword = firstSecret(obfsObject, ['password'])
       || firstSecret(proxy, ['obfs-password', 'obfs_password']);
     if (obfsType && obfsPassword) {
-      query.set('obfs', obfsType);
-      query.set('obfs-password', obfsPassword);
+      profile.obfsType = obfsType;
+      profile.obfsPassword = obfsPassword;
     }
+    profile.upMbps = Number(propertyValue(proxy, ['up', 'up-mbps', 'up_mbps'])) || 0;
+    profile.downMbps = Number(propertyValue(proxy, ['down', 'down-mbps', 'down_mbps'])) || 0;
+    profile.serverPorts = scalarList(propertyValue(proxy, [
+      'ports', 'server-ports', 'server_ports', 'mport',
+    ])).join(',');
+    profile.hopInterval = stringValue(propertyValue(proxy, ['hop-interval', 'hop_interval']));
+    profile.hopIntervalMax = stringValue(propertyValue(proxy, ['hop-interval-max', 'hop_interval_max']));
+  } else if (protocol === 'vmess') {
+    profile.uuid = firstSecret(proxy, ['uuid'], true);
+    profile.encryption = stringValue(propertyValue(proxy, ['cipher'])) || 'auto';
+    profile.alterId = Number(propertyValue(proxy, ['alterId', 'alter-id', 'alter_id'])) || 0;
+    profile.packetEncoding = stringValue(propertyValue(proxy, ['packet-encoding', 'packet_encoding']));
+    if (!profile.uuid) return null;
+  } else if (protocol === 'shadowsocks') {
+    profile.encryption = stringValue(propertyValue(proxy, ['cipher']));
+    profile.password = firstSecret(proxy, ['password']);
+    profile.plugin = stringValue(propertyValue(proxy, ['plugin']));
+    const pluginOptions = propertyValue(proxy, ['plugin-opts', 'plugin_opts']);
+    profile.pluginOptions = typeof pluginOptions === 'string'
+      ? pluginOptions
+      : Object.entries(objectValue(pluginOptions) || {})
+        .map(([key, option]) => option === true ? key : `${key}=${option}`)
+        .join(';');
+    if (!profile.encryption || !profile.password) return null;
+    if (profile.plugin && !['obfs-local', 'v2ray-plugin'].includes(profile.plugin)) return null;
+  } else if (protocol === 'socks') {
+    profile.username = stringValue(propertyValue(proxy, ['username']));
+    profile.password = firstSecret(proxy, ['password']);
+  } else if (protocol === 'wireguard') {
+    profile.privateKey = firstSecret(proxy, ['private-key', 'private_key']);
+    profile.peerPublicKey = stringValue(propertyValue(proxy, ['public-key', 'public_key']));
+    profile.preSharedKey = firstSecret(proxy, ['pre-shared-key', 'pre_shared_key', 'psk']);
+    const addresses = [
+      ...stringList(propertyValue(proxy, ['ip', 'address'])),
+      ...stringList(propertyValue(proxy, ['ipv6'])),
+    ];
+    profile.localAddress = addresses.join(',');
+    profile.reserved = scalarList(propertyValue(proxy, ['reserved'])).join(',');
+    profile.mtu = Number(propertyValue(proxy, ['mtu'])) || 0;
+    if (!profile.privateKey || !profile.peerPublicKey || !profile.localAddress) return null;
+  } else if (protocol === 'tuic') {
+    profile.uuid = firstSecret(proxy, ['uuid'], true);
+    profile.password = firstSecret(proxy, ['password']);
+    profile.congestionControl = stringValue(propertyValue(proxy, [
+      'congestion-controller', 'congestion_control', 'congestion-control',
+    ])) || 'cubic';
+    profile.udpRelayMode = stringValue(propertyValue(proxy, ['udp-relay-mode', 'udp_relay_mode'])) || 'native';
+    if (!profile.uuid) return null;
+  } else if (protocol === 'hysteria') {
+    profile.uuid = firstSecret(proxy, ['auth-str', 'auth_str', 'auth', 'password']);
+    profile.obfsPassword = firstSecret(proxy, ['obfs']);
+    profile.upMbps = Number(propertyValue(proxy, ['up', 'up-mbps', 'up_mbps'])) || 0;
+    profile.downMbps = Number(propertyValue(proxy, ['down', 'down-mbps', 'down_mbps'])) || 0;
   }
 
-  url.hash = clashProfileName(proxy, protocol, host);
-  return parseProfileLink(url.href);
+  return profile;
 }
 
 function parseClashYaml(value) {
@@ -394,38 +514,60 @@ function parseClashYaml(value) {
   return { profiles, skipped };
 }
 
+function profileSemanticValues(profile) {
+  return [
+    profile?.protocol,
+    profile?.host,
+    profile?.port,
+    profile?.uuid,
+    profile?.username,
+    profile?.password,
+    profile?.encryption,
+    profile?.alterId,
+    profile?.security,
+    profile?.sni,
+    profile?.pbk,
+    profile?.sid,
+    profile?.flow,
+    profile?.fp,
+    profile?.transport,
+    profile?.path,
+    profile?.hostHeader,
+    profile?.serviceName,
+    profile?.xhttpMode,
+    profile?.alpn,
+    profile?.packetEncoding,
+    profile?.insecure,
+    profile?.obfsType,
+    profile?.obfsPassword,
+    profile?.serverPorts,
+    profile?.hopInterval,
+    profile?.hopIntervalMax,
+    profile?.upMbps,
+    profile?.downMbps,
+    profile?.plugin,
+    profile?.pluginOptions,
+    profile?.privateKey,
+    profile?.peerPublicKey,
+    profile?.preSharedKey,
+    profile?.localAddress,
+    profile?.reserved,
+    profile?.mtu,
+    profile?.congestionControl,
+    profile?.udpRelayMode,
+  ];
+}
+
 export function subscriptionProfileKey(profile) {
   const raw = String(profile?.raw || '').trim().replace(/^hy2:\/\//i, 'hysteria2://');
   if (raw) return raw.split('#', 1)[0];
-  return [profile?.protocol, profile?.host, profile?.port, profile?.uuid]
-    .map(value => String(value ?? ''))
-    .join('\u0000');
+  return JSON.stringify(profileSemanticValues(profile));
 }
 
 function subscriptionProfileContentKey(profile) {
   const raw = String(profile?.raw || '').trim().replace(/^hy2:\/\//i, 'hysteria2://');
   if (raw) return raw;
-  return JSON.stringify([
-    profile?.protocol,
-    profile?.host,
-    profile?.port,
-    profile?.uuid,
-    profile?.password,
-    profile?.security,
-    profile?.type,
-    profile?.sni,
-    profile?.pbk,
-    profile?.sid,
-    profile?.flow,
-    profile?.path,
-    profile?.hostHeader,
-    profile?.serviceName,
-    profile?.alpn,
-    profile?.obfs,
-    profile?.obfsPassword,
-    profile?.insecure,
-    profile?.name,
-  ]);
+  return JSON.stringify([...profileSemanticValues(profile), profile?.name]);
 }
 
 export function subscriptionProfilesEqual(currentProfiles, importedProfiles) {
@@ -524,21 +666,8 @@ export function findProfileIndexAfterSubscriptionUpdate(
     );
   }
 
-  const key = String(previousProfile.raw || '') || [
-    previousProfile.protocol,
-    previousProfile.host,
-    previousProfile.port,
-    previousProfile.uuid,
-  ].join('\u0000');
-  return profiles.findIndex(profile => {
-    const profileKey = String(profile?.raw || '') || [
-      profile?.protocol,
-      profile?.host,
-      profile?.port,
-      profile?.uuid,
-    ].join('\u0000');
-    return profileKey === key;
-  });
+  const key = subscriptionProfileKey(previousProfile);
+  return profiles.findIndex(profile => subscriptionProfileKey(profile) === key);
 }
 
 function parseUriList(value) {

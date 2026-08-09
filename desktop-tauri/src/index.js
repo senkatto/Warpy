@@ -1133,7 +1133,7 @@ async function saveSettingsFromInputs() {
   const cleanSites = $('s-sites-list').value.split(',')
     .map(s => {
       let clean = s.trim().toLowerCase();
-      clean = clean.replace(/^(https?:\/\/)?(www\.)?/, '');
+      clean = clean.replace(/^https?:\/\//, '');
       clean = clean.split('/')[0].split(':')[0];
       return clean;
     })
@@ -1428,7 +1428,7 @@ function settingsStateSnapshot() {
 function settingsInputsSnapshot() {
   const cleanApps = $('s-apps-list').value.split(',').map(value => value.trim()).filter(Boolean);
   const cleanSites = $('s-sites-list').value.split(',')
-    .map(value => value.trim().toLowerCase().replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0].split(':')[0])
+    .map(value => value.trim().toLowerCase().replace(/^https?:\/\//, '').split('/')[0].split(':')[0])
     .filter(Boolean);
   return JSON.stringify({
     quic: $('s-quic').checked,
@@ -1590,7 +1590,7 @@ async function loadSettings() {
     S.sitesMode = normalizeChoice(d.sitesMode, ['off', 'only', 'bypass'], 'off');
     S.sitesList = stringList(d.sitesList).map(s => {
       let clean = s.toLowerCase();
-      clean = clean.replace(/^(https?:\/\/)?(www\.)?/, '');
+      clean = clean.replace(/^https?:\/\//, '');
       clean = clean.split('/')[0].split(':')[0];
       return clean;
     }).filter(s => s.length > 0);

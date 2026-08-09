@@ -633,7 +633,7 @@ function directServerRule(profile) {
 
 function cleanDomains(domains) {
   return [...new Set((domains || []).map(value => String(value).trim().toLowerCase())
-    .map(value => value.replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0].split(':')[0])
+    .map(value => value.replace(/^https?:\/\//, '').split('/')[0].split(':')[0])
     .filter(Boolean))];
 }
 

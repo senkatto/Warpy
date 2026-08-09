@@ -1039,12 +1039,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
-private fun normalizeTunnelSite(value: String): String? {
+internal fun normalizeTunnelSite(value: String): String? {
     val host = value.trim()
         .lowercase()
         .removePrefix("https://")
         .removePrefix("http://")
-        .removePrefix("www.")
         .substringBefore('/')
         .substringBefore(':')
         .trim('.')

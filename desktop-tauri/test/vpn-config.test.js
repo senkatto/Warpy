@@ -337,6 +337,21 @@ test('builds bypass rules without changing the default VPN route', () => {
   assert.ok(config.dns.rules.some(rule => rule.domain_suffix?.includes('example.com') && rule.server === 'local-dns'));
 });
 
+test('keeps www host exclusions scoped away from sibling Google services', () => {
+  const profile = parseProfileLink('hysteria2://secret@203.0.113.10:443#HY2');
+  const config = buildSingBoxConfig(profile, {
+    sitesMode: 'bypass',
+    sitesList: ['https://www.google.com/search?q=warpy'],
+  });
+  const siteRule = config.route.rules.find(
+    rule => rule.outbound === 'direct' && rule.domain_suffix?.includes('www.google.com'),
+  );
+
+  assert.ok(siteRule);
+  assert.equal(siteRule.domain_suffix.includes('google.com'), false);
+  assert.equal(siteRule.domain_suffix.includes('gemini.google.com'), false);
+});
+
 test('routes Russian domain zones outside VLESS and Hysteria2 tunnels', () => {
   const profiles = [
     parseProfileLink(

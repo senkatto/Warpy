@@ -16,6 +16,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify release notes
+        shell: bash
+        run: test -s "docs/releases/$GITHUB_REF_NAME.md"
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
@@ -161,6 +165,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+
       - name: Download verified release assets
         uses: actions/download-artifact@v4
         with:
@@ -179,14 +186,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: Warpy ${{ github.ref_name }}
-          generate_release_notes: true
-          body: |
-            ## Установщики
-
-            - **Android:** `Warpy-Android.apk` (Android 8.0+, ARM64)
-            - **Windows:** `Warpy-Windows.exe` (Windows 10/11, x64)
-
-            Android и Windows используют одну версию релиза.
+          body_path: docs/releases/${{ github.ref_name }}.md
           files: |
             release-assets/Warpy-Android.apk
             release-assets/Warpy-Windows.exe

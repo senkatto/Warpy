@@ -35,11 +35,13 @@ const sourceFiles = [
 ];
 
 test('Android and Windows versions stay internally consistent', async () => {
-  const [packageJsonRaw, packageLockRaw, cargoToml, tauriConfigRaw, html, androidBuild] = await Promise.all([
+  const [packageJsonRaw, packageLockRaw, cargoToml, cargoLock, tauriConfigRaw, appManifest, html, androidBuild] = await Promise.all([
     readFile(path.join(projectRoot, 'package.json'), 'utf8'),
     readFile(path.join(projectRoot, 'package-lock.json'), 'utf8'),
     readFile(path.join(projectRoot, 'src-tauri/Cargo.toml'), 'utf8'),
+    readFile(path.join(projectRoot, 'src-tauri/Cargo.lock'), 'utf8'),
     readFile(path.join(projectRoot, 'src-tauri/tauri.conf.json'), 'utf8'),
+    readFile(path.join(projectRoot, 'src-tauri/app.manifest'), 'utf8'),
     readFile(path.join(projectRoot, 'src/index.html'), 'utf8'),
     readFile(path.join(projectRoot, '../app/build.gradle.kts'), 'utf8'),
   ]);
@@ -53,7 +55,9 @@ test('Android and Windows versions stay internally consistent', async () => {
   assert.equal(packageLock.version, packageJson.version);
   assert.equal(packageLock.packages[''].version, packageJson.version);
   assert.equal(cargoVersion, packageJson.version);
+  assert.match(cargoLock, new RegExp(`name = "warpy-desktop"\\r?\\nversion = "${packageJson.version.replaceAll('.', '\\.')}"`));
   assert.equal(tauriConfig.version, packageJson.version);
+  assert.match(appManifest, new RegExp(`version="${packageJson.version.replaceAll('.', '\\.')}\\.0"`));
   assert.match(html, new RegExp(`index\\.css\\?v=${packageJson.version.replaceAll('.', '\\.')}`));
   assert.match(html, new RegExp(`index\\.js\\?v=${packageJson.version.replaceAll('.', '\\.')}`));
 

@@ -51,9 +51,10 @@ secret file. Do not print them in a build log.
 1. Update Android `versionCode` and `versionName` in `app/build.gradle.kts`.
 2. Set the same public version in `desktop-tauri/package.json`,
    `desktop-tauri/src-tauri/Cargo.toml`, and `desktop-tauri/src-tauri/tauri.conf.json`.
-3. Build and test both clients locally. Do not publish yet.
-4. After explicit approval, commit and push the reviewed source.
-5. Create one tag equal to the shared version, for example `v1.0.1`, and push it:
+3. Add reviewed Russian release notes to `docs/releases/v<version>.md`.
+4. Build and test both clients locally. Do not publish yet.
+5. After explicit approval, commit and push the reviewed source.
+6. Create one tag equal to the shared version, for example `v1.0.1`, and push it:
 
 ```powershell
 git tag v1.0.1
@@ -62,8 +63,8 @@ git push origin v1.0.1
 
 The workflow rejects the tag unless all Android and Windows version files match it. It then builds
 and verifies both clients before publishing one release containing `Warpy-Android.apk`,
-`Warpy-Windows.exe`, and the signed Windows updater metadata. If either build fails, the release is
-not published.
+`Warpy-Windows.exe`, the signed Windows updater metadata, and the reviewed release notes. If either
+build fails or the release notes are missing, the release is not published.
 
 ## Local production build
 

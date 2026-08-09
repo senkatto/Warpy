@@ -105,6 +105,7 @@ import kotlinx.coroutines.sync.withLock
 
 class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     private val stateMutex = Mutex()
+    private val probeMutex = Mutex()
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val coreResourceLock = Any()
     private val coreCloseLock = Any()
@@ -130,7 +131,9 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     private var networkMonitor: NetworkObserver? = null
     private var screenReceiver: BroadcastReceiver? = null
     private val wakeProbeJobOwner = CancellableJobOwner(serviceScope)
+    private val tunnelWatchdogJobOwner = CancellableJobOwner(serviceScope)
     private val networkChangeJobOwner = CancellableJobOwner(serviceScope)
+    @Volatile private var lastTunnelTrafficAt = 0L
     private val serviceHandler = Handler(Looper.getMainLooper())
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     private val dnsExecutor: ExecutorService = Executors.newCachedThreadPool()
@@ -583,7 +586,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         maxRetries: Int = INITIAL_PROBE_RETRIES,
         connectTimeoutMillis: Int = INITIAL_PROBE_TIMEOUT_MS,
         readTimeoutMillis: Int = INITIAL_PROBE_TIMEOUT_MS,
-    ): Boolean {
+    ): Boolean = probeMutex.withLock {
         val proxyConfig = localProxyConfig ?: return false
         lastProbeFailure = null
         val result = tunnelValidator.validate(
@@ -602,7 +605,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             }
         }
         lastProbeFailure = result.lastFailure?.let(::stripAnsi)
-        return result.isValid
+        result.isValid
     }
 
     private fun stopCore(clearSavedConfig: Boolean = false) {
@@ -729,6 +732,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private fun stopCoreInternalSync(removeForeground: Boolean = true) {
         wakeProbeJobOwner.cancel()
+        tunnelWatchdogJobOwner.cancel()
         networkChangeJobOwner.cancel()
         val resources = synchronized(coreResourceLock) {
             coreResourcesOpen = false
@@ -1652,13 +1656,74 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             runCatching { client.disconnect() }
             Log.w(TAG, "sing-box traffic statistics are unavailable", error)
         }
+        startTunnelWatchdog()
     }
 
     private fun stopStatusUpdates() {
+        tunnelWatchdogJobOwner.cancel()
         val client = synchronized(coreResourceLock) {
             statusClient.also { statusClient = null }
         }
         runCatching { client?.disconnect() }
+    }
+
+    private fun startTunnelWatchdog() {
+        if (!stabilityMode) return
+        lastTunnelTrafficAt = SystemClock.elapsedRealtime()
+        tunnelWatchdogJobOwner.launch {
+            var consecutiveFailures = 0
+            while (currentCoroutineContext().isActive) {
+                delay(TUNNEL_WATCHDOG_INTERVAL_MS)
+                if (serviceDestroyed ||
+                    !loadShouldBeRunning() ||
+                    vpnState != VpnState.Connected ||
+                    commandServer == null
+                ) {
+                    consecutiveFailures = 0
+                    continue
+                }
+
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastTunnelTrafficAt < TUNNEL_WATCHDOG_INTERVAL_MS) {
+                    consecutiveFailures = 0
+                    continue
+                }
+                if (findUpstreamNetwork() == null) {
+                    consecutiveFailures = 0
+                    continue
+                }
+
+                val isValid = runConnectionProbe(
+                    maxRetries = TUNNEL_WATCHDOG_PROBE_RETRIES,
+                    connectTimeoutMillis = TUNNEL_WATCHDOG_PROBE_TIMEOUT_MS,
+                    readTimeoutMillis = TUNNEL_WATCHDOG_PROBE_TIMEOUT_MS,
+                )
+                if (isValid) {
+                    consecutiveFailures = 0
+                    continue
+                }
+
+                consecutiveFailures += 1
+                Log.w(TAG, "background tunnel probe failed ($consecutiveFailures/$TUNNEL_WATCHDOG_FAILURES)")
+                if (consecutiveFailures < TUNNEL_WATCHDOG_FAILURES) continue
+
+                val runtime = sessionRuntime()
+                val snapshot = runtime.snapshot()
+                if (snapshot.state == VpnState.Connected && snapshot.shouldRun) {
+                    runtime.dispatch(
+                        VpnSessionEvent.RecoveryRequested(
+                            generation = snapshot.generation,
+                            request = RecoveryRequest(
+                                reason = "background-watchdog",
+                                probeBeforeRefresh = false,
+                                resetConnectionsOnSuccess = true,
+                            ),
+                        ),
+                    )
+                }
+                return@launch
+            }
+        }
     }
 
     private inner class TunnelStatusHandler : CommandClientHandler {
@@ -1673,6 +1738,9 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         override fun writeLogs(logs: LogIterator?) = Unit
         override fun writeStatus(message: StatusMessage?) {
             if (message == null) return
+            if (message.downlink > 0L || message.uplink > 0L) {
+                lastTunnelTrafficAt = SystemClock.elapsedRealtime()
+            }
             sendBroadcast(
                 Intent(ACTION_STATS)
                     .setPackage(packageName)
@@ -1964,6 +2032,10 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         private const val RECOVERY_PROBE_RETRIES = 2
         private const val RECOVERY_PROBE_TIMEOUT_MS = 2500
         private const val HYSTERIA_RECOVERY_SETTLE_MS = 1500L
+        private const val TUNNEL_WATCHDOG_INTERVAL_MS = 30_000L
+        private const val TUNNEL_WATCHDOG_PROBE_RETRIES = 1
+        private const val TUNNEL_WATCHDOG_PROBE_TIMEOUT_MS = 2_000
+        private const val TUNNEL_WATCHDOG_FAILURES = 2
 
         private const val LOCAL_PROXY_BIND_ATTEMPTS = 3
         private const val STATUS_INTERVAL_NANOS = 1_000_000_000L

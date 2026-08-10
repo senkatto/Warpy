@@ -31,13 +31,13 @@ class SettingsMigrationTest {
     fun currentSchemaPreservesExplicitCertificateVerification() {
         val profile = VpnProfile("hy2", Protocol.Hysteria2, "example.com", 443)
 
-        val migrated = migrateProfilesForSchema(listOf(profile), storedSchemaVersion = 4)
+        val migrated = migrateProfilesForSchema(listOf(profile), storedSchemaVersion = 5)
 
         assertFalse(migrated.single().allowInsecure)
     }
 
     @Test
-    fun schema3RemovesLegacyProviderGrouping() {
+    fun schema3PreservesLegacyProviderGrouping() {
         val profiles = listOf(
             VpnProfile("Imported", Protocol.Vless, "vpn.example.com", 443, group = "BlancVPN"),
             VpnProfile("Personal", Protocol.Hysteria2, "hy2.example.com", 443, group = "Personal"),
@@ -45,7 +45,7 @@ class SettingsMigrationTest {
 
         val migrated = migrateProfilesForSchema(profiles, storedSchemaVersion = 3)
 
-        assertTrue(migrated.first().group.isBlank())
+        assertEquals("BlancVPN", migrated.first().group)
         assertEquals("Personal", migrated.last().group)
     }
 
@@ -59,9 +59,25 @@ class SettingsMigrationTest {
             group = "BlancVPN",
         )
 
-        val migrated = migrateProfilesForSchema(listOf(profile), storedSchemaVersion = 4)
+        val migrated = migrateProfilesForSchema(listOf(profile), storedSchemaVersion = 5)
 
         assertEquals("BlancVPN", migrated.single().group)
+    }
+
+    @Test
+    fun schema4RecoversGroupsRemovedByThePreviousMigration() {
+        val sharedUuid = "00000000-0000-4000-8000-000000000001"
+        val profiles = listOf(
+            VpnProfile("One", Protocol.Vless, "one.example.com", 443, uuid = sharedUuid),
+            VpnProfile("Two", Protocol.Vless, "two.example.com", 443, uuid = sharedUuid),
+            VpnProfile("Three", Protocol.Vless, "three.example.com", 443, uuid = sharedUuid),
+            VpnProfile("Personal", Protocol.Vless, "personal.example.com", 443, uuid = "other"),
+        )
+
+        val migrated = migrateProfilesForSchema(profiles, storedSchemaVersion = 4)
+
+        assertTrue(migrated.take(3).all { it.group == "BlancVPN" })
+        assertTrue(migrated.last().group.isBlank())
     }
 
     @Test

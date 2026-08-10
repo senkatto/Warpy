@@ -22,7 +22,7 @@ class ProfileIdentityTest {
 
         val result = mergeImportedProfiles(listOf(existing), listOf(imported))!!
 
-        assertEquals(listOf(existing), result.profiles)
+        assertEquals(listOf(existing.copy(group = "Provider")), result.profiles)
         assertEquals(0, result.importedIndex)
     }
 
@@ -50,5 +50,17 @@ class ProfileIdentityTest {
 
         assertEquals(listOf(websocket, grpc), result.profiles)
         assertEquals(1, result.importedIndex)
+    }
+
+    @Test
+    fun subscriptionNameUsesFragmentThenProviderHost() {
+        assertEquals(
+            "BlancVPN",
+            subscriptionDisplayName("https://0123456789abcdef.withprovider.example/sub#BlancVPN"),
+        )
+        assertEquals(
+            "PROVIDER",
+            subscriptionDisplayName("https://0123456789abcdef.withprovider.example/sub"),
+        )
     }
 }

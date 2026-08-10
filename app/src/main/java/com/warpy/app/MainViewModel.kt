@@ -12,6 +12,7 @@ import com.warpy.app.data.SettingsStore
 import com.warpy.app.data.SubscriptionFetcher
 import com.warpy.app.data.SubscriptionParser
 import com.warpy.app.data.mergeImportedProfiles
+import com.warpy.app.data.subscriptionDisplayName
 import com.warpy.app.model.AppSettings
 import com.warpy.app.model.AppLanguage
 import com.warpy.app.model.AppTunnelMode
@@ -230,6 +231,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return false
         }
         if (trimmed.startsWith("https://", ignoreCase = true)) {
+            val groupName = runCatching { subscriptionDisplayName(trimmed) }.getOrElse {
+                fail("Некорректная ссылка подписки")
+                return false
+            }
             _state.value = _state.value.copy(
                 commandError = null,
             )
@@ -240,7 +245,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 withContext(Dispatchers.Main) {
                     result.onSuccess { parsed ->
-                        finishProfileImport(parsed.profiles)
+                        finishProfileImport(
+                            parsed.profiles.map { profile -> profile.copy(group = groupName) },
+                        )
                     }.onFailure { err ->
                         fail("Ошибка загрузки подписки: ${err.message}")
                     }

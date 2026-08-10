@@ -14,7 +14,7 @@ import org.json.JSONObject
 import java.util.Locale
 
 private const val PROFILES_SCHEMA_VERSION_KEY = "profilesSchemaVersion"
-private const val PROFILES_SCHEMA_VERSION = 4
+private const val PROFILES_SCHEMA_VERSION = 5
 private const val PROFILES_JSON_KEY = "profilesJson"
 private const val PROFILES_JSON_BACKUP_KEY = "profilesJsonBackup"
 
@@ -68,12 +68,27 @@ internal fun migrateProfilesForSchema(
     storedSchemaVersion: Int,
 ): List<VpnProfile> {
     if (storedSchemaVersion >= PROFILES_SCHEMA_VERSION) return profiles
-    return profiles.map { profile ->
-        if (storedSchemaVersion <= 3 && profile.group == "BlancVPN") {
-            profile.copy(group = "")
-        } else {
-            profile
+    if (storedSchemaVersion <= 3) return profiles
+
+    val vlessGroups = profiles
+        .filter { it.protocol == Protocol.Vless && it.uuid.isNotBlank() }
+        .groupBy { it.uuid }
+    val passwordGroups = profiles
+        .filter {
+            (it.protocol == Protocol.Hysteria2 || it.protocol == Protocol.Trojan) &&
+                it.password.isNotBlank()
         }
+        .groupBy { it.protocol to it.password }
+
+    return profiles.map { profile ->
+        if (profile.group.isNotBlank()) return@map profile
+        val belongedToLegacySubscription = when (profile.protocol) {
+            Protocol.Vless -> (vlessGroups[profile.uuid]?.size ?: 0) >= 3
+            Protocol.Hysteria2, Protocol.Trojan ->
+                (passwordGroups[profile.protocol to profile.password]?.size ?: 0) >= 3
+            else -> false
+        }
+        if (belongedToLegacySubscription) profile.copy(group = "BlancVPN") else profile
     }
 }
 

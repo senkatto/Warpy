@@ -2,7 +2,7 @@
 package com.warpy.app.vpn.generated
 
 internal object CoreContract {
-    const val SOURCE_SHA256 = "61dfe9d722a0c140d8caa515f7c70e3f84f5a73e60bbeb4aa77cae2bee2a2552"
+    const val SOURCE_SHA256 = "7aee2db84c3b77b856eab8f11f002f8ea38d02c21639d8f6bc7e4f610254b6ab"
     const val VERSION = 1
     val protocols = setOf("vless", "trojan", "hysteria2", "vmess", "shadowsocks", "socks", "wireguard", "tuic", "hysteria")
     val transports = setOf("tcp", "raw", "ws", "grpc", "http", "httpupgrade", "xhttp")
@@ -27,7 +27,7 @@ internal object CoreContract {
     }
 
     object Routing {
-        val russianDomainSuffixes = listOf(".ru", ".xn--p1ai", ".su", "ozonusercontent.com")
+        val russianDomainSuffixes = listOf(".ru", ".xn--p1ai", ".su", "ozonusercontent.com", "mvk.com", "vk.cc", "vk.com", "vk.design", "vk.link", "vkontakte.com", "cdn-vk.net", "userapi.com", "vk-cdn.me", "vk-cdn.net", "vk-portal.net", "vkcache.com", "vkcdnservice.com", "vkuser.net", "vkuseraudio.com", "vkuseraudio.net", "vkuserlive.com", "vkuserlive.net", "vkuservideo.com", "vkuservideo.net", "vk.me", "vkmessenger.app", "vkmessenger.com", "vkpay.app", "vkpay.com", "vkpay.io")
         val healthDomainSuffixes = listOf("speed.cloudflare.com")
         const val blockQuicOnlyWhenEnabled = true
     }

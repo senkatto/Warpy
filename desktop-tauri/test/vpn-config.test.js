@@ -363,7 +363,16 @@ test('routes Russian domain zones outside VLESS and Hysteria2 tunnels', () => {
 
   for (const profile of profiles) {
     const config = buildSingBoxConfig(profile, { adblock: true, quic: true });
-    const expected = ['.ru', '.xn--p1ai', '.su', 'ozonusercontent.com'];
+    const expected = [
+      '.ru',
+      '.xn--p1ai',
+      '.su',
+      'ozonusercontent.com',
+      'vk.com',
+      'userapi.com',
+      'vkuseraudio.net',
+      'vkuservideo.net',
+    ];
     const directIndex = config.route.rules.findIndex(
       rule => rule.outbound === 'direct' && expected.every(suffix => rule.domain_suffix?.includes(suffix)),
     );

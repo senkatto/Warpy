@@ -373,16 +373,7 @@ class SingBoxConfigBuilderTest {
                     filesDir = "/tmp",
                 ),
             )
-            val expected = setOf(
-                ".ru",
-                ".xn--p1ai",
-                ".su",
-                "ozonusercontent.com",
-                "vk.com",
-                "userapi.com",
-                "vkuseraudio.net",
-                "vkuservideo.net",
-            )
+            val expected = setOf(".ru", ".xn--p1ai", ".su", "ozonusercontent.com")
             val dnsRules = root.getJSONObject("dns").getJSONArray("rules")
             val localDnsRule = (0 until dnsRules.length())
                 .map(dnsRules::getJSONObject)
@@ -402,8 +393,8 @@ class SingBoxConfigBuilderTest {
             val routeSuffixes = rules[directIndex].getJSONArray("domain_suffix")
             val routeValues = (0 until routeSuffixes.length()).map(routeSuffixes::getString).toSet()
 
-            assertTrue(dnsValues.containsAll(expected))
-            assertTrue(routeValues.containsAll(expected))
+            assertEquals(expected, dnsValues)
+            assertEquals(expected, routeValues)
             assertTrue(adIndex in 0 until directIndex)
             assertTrue(quicIndex > directIndex)
         }

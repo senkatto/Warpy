@@ -2,15 +2,11 @@ package com.warpy.app
 
 import com.warpy.app.vpn.COMMAND_HANDSHAKE_RETRY_DELAY_MS
 import com.warpy.app.vpn.MAX_COMMAND_HANDSHAKE_ATTEMPTS
-import com.warpy.app.vpn.MAX_RECOVERY_ATTEMPTS
 import com.warpy.app.vpn.NETWORK_CHANGE_DEBOUNCE_MS
-import com.warpy.app.vpn.RECOVERY_TIME_BUDGET_MS
 import com.warpy.app.vpn.UpstreamIdentity
 import com.warpy.app.vpn.isHandoverCandidatePhysicalNetwork
 import com.warpy.app.vpn.isUsablePhysicalNetwork
 import com.warpy.app.vpn.physicalNetworkPriority
-import com.warpy.app.vpn.recoveryDelayMillis
-import com.warpy.app.vpn.shouldContinueRecovery
 import com.warpy.app.vpn.shouldRetryCommandHandshake
 import com.warpy.app.vpn.shouldResetConnectionsAfterSleep
 import kotlin.test.Test
@@ -97,36 +93,6 @@ class ConnectionRecoveryPolicyTest {
 
         assertTrue(isHandoverCandidatePhysicalNetwork(true, false, false, false))
         assertTrue(validatedCellular > pendingWifi)
-    }
-
-    @Test
-    fun `recovery retries use bounded exponential backoff`() {
-        val delays = (0 until MAX_RECOVERY_ATTEMPTS).map {
-            recoveryDelayMillis(it, jitterUnit = 0.5)
-        }
-
-        assertEquals(listOf(0L, 1_000L, 2_000L, 4_000L, 8_000L, 16_000L), delays)
-        assertEquals(20_000L, recoveryDelayMillis(100, jitterUnit = 0.5))
-    }
-
-    @Test
-    fun `recovery jitter stays within twenty percent of the base delay`() {
-        assertEquals(6_400L, recoveryDelayMillis(4, jitterUnit = 0.0))
-        assertEquals(8_000L, recoveryDelayMillis(4, jitterUnit = 0.5))
-        assertEquals(9_600L, recoveryDelayMillis(4, jitterUnit = 1.0))
-    }
-
-    @Test
-    fun `recovery stops at its attempt or elapsed time budget`() {
-        assertTrue(shouldContinueRecovery(failedAttempts = 0, elapsedMillis = 0L))
-        assertTrue(
-            shouldContinueRecovery(
-                failedAttempts = MAX_RECOVERY_ATTEMPTS - 1,
-                elapsedMillis = RECOVERY_TIME_BUDGET_MS - 1L,
-            ),
-        )
-        assertFalse(shouldContinueRecovery(MAX_RECOVERY_ATTEMPTS, 0L))
-        assertFalse(shouldContinueRecovery(0, RECOVERY_TIME_BUDGET_MS))
     }
 
     @Test

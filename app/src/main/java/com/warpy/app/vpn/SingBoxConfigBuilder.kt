@@ -11,6 +11,9 @@ import org.json.JSONObject
 
 object SingBoxConfigBuilder {
     private const val AD_RULE_SET_TAG = "warpy-ads"
+    private const val TCP_CONNECT_TIMEOUT = "10s"
+    private const val TCP_KEEP_ALIVE = "30s"
+    private const val TCP_KEEP_ALIVE_INTERVAL = "15s"
 
     fun build(
         settings: AppSettings,
@@ -244,6 +247,7 @@ object SingBoxConfigBuilder {
                     put("transport", it)
                 }
             }
+            .withTcpDialDefaults()
 
         Protocol.Trojan -> JSONObject()
             .put("type", "trojan")
@@ -260,6 +264,7 @@ object SingBoxConfigBuilder {
                     put("transport", it)
                 }
             }
+            .withTcpDialDefaults()
 
 
         Protocol.Hysteria2 -> JSONObject()
@@ -306,6 +311,7 @@ object SingBoxConfigBuilder {
                     put("transport", it)
                 }
             }
+            .withTcpDialDefaults()
 
         Protocol.Shadowsocks -> JSONObject()
             .put("type", "shadowsocks")
@@ -318,6 +324,7 @@ object SingBoxConfigBuilder {
                 if (plugin.isNotBlank()) put("plugin", plugin)
                 if (pluginOptions.isNotBlank()) put("plugin_opts", pluginOptions)
             }
+            .withTcpDialDefaults()
 
         Protocol.Socks -> JSONObject()
             .put("type", "socks")
@@ -327,6 +334,7 @@ object SingBoxConfigBuilder {
             .put("version", "5")
             .put("username", username.takeIf { it.isNotBlank() })
             .put("password", password.takeIf { it.isNotBlank() })
+            .withTcpDialDefaults()
 
         Protocol.WireGuard -> error("WireGuard must be configured as an endpoint")
 
@@ -352,6 +360,11 @@ object SingBoxConfigBuilder {
             .put("down_mbps", hysteria2DownMbps.takeIf { it > 0 })
             .put("tls", tlsForGeneric(required = true))
     }
+
+    private fun JSONObject.withTcpDialDefaults(): JSONObject =
+        put("connect_timeout", TCP_CONNECT_TIMEOUT)
+            .put("tcp_keep_alive", TCP_KEEP_ALIVE)
+            .put("tcp_keep_alive_interval", TCP_KEEP_ALIVE_INTERVAL)
 
     private fun VpnProfile.toWireGuardEndpoint(customTag: String): JSONObject {
         val peer = JSONObject()

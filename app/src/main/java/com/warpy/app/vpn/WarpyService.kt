@@ -1140,61 +1140,52 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     private suspend fun recoverConnectionBounded(
         request: RecoveryRequest,
     ): ConnectionRecoveryResult {
-        val startedAt = SystemClock.elapsedRealtime()
-        var failedAttempt = 0
-        var probeCurrentCore = request.probeBeforeRefresh
-
-        while (currentCoroutineContext().isActive &&
-            !explicitStopRequested &&
-            loadShouldBeRunning() &&
-            shouldContinueRecovery(
-                failedAttempts = failedAttempt,
-                elapsedMillis = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L),
-            )
-        ) {
-            val currentNetwork = findUpstreamNetwork()
-                ?: return ConnectionRecoveryResult.Deferred("Ожидание сети")
-
-            upstreamNetwork = currentNetwork
-            runCatching { setUnderlyingNetworks(arrayOf(currentNetwork)) }
-                .onFailure { Log.w(TAG, "failed to update underlying network", it) }
-            updateDefaultInterface(currentNetwork)
-
-            if (probeCurrentCore && hasActiveVpnTunnel() && probeForRecovery()) {
-                return completedRecovery(request)
-            }
-            probeCurrentCore = false
-
-            val retryDelay = recoveryDelayMillis(
-                failedAttempt = failedAttempt,
-                jitterUnit = secureRandom.nextDouble(),
-            )
-            if (retryDelay > 0L) delay(retryDelay)
-            currentCoroutineContext().ensureActive()
-            if (explicitStopRequested || !loadShouldBeRunning()) {
-                throw CancellationException("VPN stop requested")
-            }
-
-            val refreshed = refreshCoreForRecovery(request.reason, failedAttempt + 1)
-            if (refreshed && activeProfileProtocol()?.isUdpBased == true) {
-                delay(HYSTERIA_RECOVERY_SETTLE_MS)
-            }
-            if (refreshed && hasActiveVpnTunnel() && probeForRecovery()) {
-                return completedRecovery(request)
-            }
-            failedAttempt += 1
+        currentCoroutineContext().ensureActive()
+        if (explicitStopRequested || !loadShouldBeRunning()) {
+            throw CancellationException("VPN stop requested")
         }
 
-        Log.w(
-            TAG,
-            "bounded recovery exhausted reason=${request.reason}",
-        )
-        return ConnectionRecoveryResult.Exhausted("Не удалось установить соединение")
+        val currentNetwork = findUpstreamNetwork()
+            ?: return ConnectionRecoveryResult.Deferred("Ожидание сети")
+
+        upstreamNetwork = currentNetwork
+        runCatching { setUnderlyingNetworks(arrayOf(currentNetwork)) }
+            .onFailure { Log.w(TAG, "failed to update underlying network", it) }
+        updateDefaultInterface(currentNetwork)
+
+        if (request.probeBeforeRefresh && hasActiveVpnTunnel() && probeForRecovery()) {
+            return completedRecovery(request)
+        }
+
+        if (!hasActiveVpnTunnel()) {
+            Log.w(TAG, "recovery requires a clean core restart reason=${request.reason}: tunnel is unavailable")
+            return ConnectionRecoveryResult.Exhausted("Не удалось восстановить соединение")
+        }
+
+        val connectionsReset = closeTunnelConnections("${request.reason}/recovery")
+        if (connectionsReset) {
+            val settleDelay = if (activeProfileProtocol()?.isUdpBased == true) {
+                HYSTERIA_RECOVERY_SETTLE_MS
+            } else {
+                CONNECTION_RESET_SETTLE_MS
+            }
+            delay(settleDelay)
+            currentCoroutineContext().ensureActive()
+            if (hasActiveVpnTunnel() && probeForRecovery()) {
+                return completedRecovery(request, connectionsAlreadyReset = true)
+            }
+        }
+
+        Log.w(TAG, "connection reset did not recover tunnel reason=${request.reason}; requesting clean restart")
+        return ConnectionRecoveryResult.Exhausted("Не удалось восстановить соединение")
     }
 
-    private fun completedRecovery(request: RecoveryRequest): ConnectionRecoveryResult.Succeeded {
+    private fun completedRecovery(
+        request: RecoveryRequest,
+        connectionsAlreadyReset: Boolean = false,
+    ): ConnectionRecoveryResult.Succeeded {
         check(hasActiveVpnTunnel()) { "Android VPN tunnel is unavailable after recovery" }
-        if (request.resetConnectionsOnSuccess) {
+        if (request.resetConnectionsOnSuccess && !connectionsAlreadyReset) {
             closeTunnelConnections("${request.reason}/recovered")
         }
         startStatusUpdates()
@@ -1227,29 +1218,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         connectTimeoutMillis = RECOVERY_PROBE_TIMEOUT_MS,
         readTimeoutMillis = RECOVERY_PROBE_TIMEOUT_MS,
     )
-
-    private suspend fun refreshCoreForRecovery(reason: String, attempt: Int): Boolean =
-        stateMutex.withLock {
-            if (explicitStopRequested || !loadShouldBeRunning()) return@withLock false
-            val savedConfig = loadLastConfig()
-            val server = commandServer
-            val proxyConfig = localProxyConfig
-            if (savedConfig.isBlank() || server == null || proxyConfig == null) return@withLock false
-
-            runCatching {
-                Log.i(TAG, "refreshing sing-box reason=$reason attempt=$attempt")
-                val settings = com.warpy.app.data.SettingsStore(this@WarpyService).load()
-                val config = buildRuntimeConfig(settings, proxyConfig)
-                server.startOrReloadService(config, OverrideOptions())
-                val selectedTag = activeOutboundTag ?: "profile_${settings.activeProfileIndex}"
-                check(selectOutboundSync(selectedTag)) { "failed to restore selected outbound" }
-                setActiveOutboundTag(selectedTag)
-                true
-            }.getOrElse {
-                Log.w(TAG, "sing-box recovery refresh failed reason=$reason attempt=$attempt", it)
-                false
-            }
-        }
 
     private fun activeProfileProtocol(): Protocol? {
         val settings = com.warpy.app.data.SettingsStore(this).load()
@@ -2031,6 +1999,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         private const val WAKE_PROBE_TIMEOUT_MS = 2000
         private const val RECOVERY_PROBE_RETRIES = 2
         private const val RECOVERY_PROBE_TIMEOUT_MS = 2500
+        private const val CONNECTION_RESET_SETTLE_MS = 350L
         private const val HYSTERIA_RECOVERY_SETTLE_MS = 1500L
         private const val TUNNEL_WATCHDOG_INTERVAL_MS = 30_000L
         private const val TUNNEL_WATCHDOG_PROBE_RETRIES = 1

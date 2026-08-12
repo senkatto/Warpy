@@ -98,6 +98,37 @@ class SingBoxConfigBuilderTest {
     }
 
     @Test
+    fun `tcp profiles detect stale connections before application traffic stalls`() {
+        val tcpProtocols = listOf(
+            Protocol.Vless,
+            Protocol.Trojan,
+            Protocol.Vmess,
+            Protocol.Shadowsocks,
+            Protocol.Socks,
+        )
+
+        tcpProtocols.forEach { protocol ->
+            val tcpProfile = profile.copy(
+                protocol = protocol,
+                uuid = "00000000-0000-4000-8000-000000000001",
+                encryption = "aes-256-gcm",
+            )
+            val outbound = JSONObject(
+                SingBoxConfigBuilder.build(AppSettings(profiles = listOf(tcpProfile))),
+            ).getJSONArray("outbounds").getJSONObject(0)
+
+            assertEquals("10s", outbound.getString("connect_timeout"))
+            assertEquals("30s", outbound.getString("tcp_keep_alive"))
+            assertEquals("15s", outbound.getString("tcp_keep_alive_interval"))
+        }
+
+        val udpOutbound = JSONObject(
+            SingBoxConfigBuilder.build(AppSettings(profiles = listOf(profile))),
+        ).getJSONArray("outbounds").getJSONObject(0)
+        assertFalse(udpOutbound.has("tcp_keep_alive"))
+    }
+
+    @Test
     fun `quic is rejected only when explicitly enabled`() {
         val vless = profile.copy(
             protocol = Protocol.Vless,
@@ -227,11 +258,13 @@ class SingBoxConfigBuilderTest {
     @Test
     fun `tun keeps the dual stack address`() {
         val root = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(profile))))
-        val address = root.getJSONArray("inbounds").getJSONObject(0).getJSONArray("address")
+        val tun = root.getJSONArray("inbounds").getJSONObject(0)
+        val address = tun.getJSONArray("address")
 
         assertEquals(2, address.length())
         assertEquals("172.19.0.1/30", address.getString(0))
         assertEquals("fdfe:dcba:9876::1/126", address.getString(1))
+        assertEquals("gvisor", tun.getString("stack"))
     }
 
     @Test

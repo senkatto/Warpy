@@ -35,6 +35,7 @@ internal fun physicalNetworkPriority(
     hasCellular: Boolean,
     isMetered: Boolean,
     isCurrent: Boolean,
+    isSystemPreferred: Boolean = false,
 ): Int {
     val transportPriority = when {
         hasEthernet -> 300
@@ -43,6 +44,7 @@ internal fun physicalNetworkPriority(
         else -> 0
     }
     return (if (isValidated) 1_000 else 0) +
+        (if (isSystemPreferred) 500 else 0) +
         transportPriority +
         (if (isMetered) 0 else 20) +
         (if (isCurrent) 5 else 0)

@@ -35,12 +35,11 @@ internal class DefaultNetworkMonitor(
     @Volatile
     private var activeState: PhysicalNetworkState? = null
     private val candidates = linkedMapOf<Network, Candidate>()
-    private val tracksBestNetworkOnly = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    private var preferredNetwork: Network? = null
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             Log.i(TAG, "Physical network available: $network")
-            if (tracksBestNetworkOnly) candidates.clear()
             candidates.getOrPut(network, ::Candidate).apply {
                 capabilities = connectivity.getNetworkCapabilities(network)
                 linkProperties = connectivity.getLinkProperties(network)
@@ -76,6 +75,38 @@ internal class DefaultNetworkMonitor(
         }
     }
 
+    private val preferredCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            preferredNetwork = network
+            candidates.getOrPut(network, ::Candidate).apply {
+                capabilities = connectivity.getNetworkCapabilities(network)
+                linkProperties = connectivity.getLinkProperties(network)
+            }
+            publishBestNetwork()
+        }
+
+        override fun onCapabilitiesChanged(
+            network: Network,
+            capabilities: NetworkCapabilities,
+        ) {
+            candidates.getOrPut(network, ::Candidate).capabilities = capabilities
+            publishBestNetwork()
+        }
+
+        override fun onLinkPropertiesChanged(
+            network: Network,
+            properties: LinkProperties,
+        ) {
+            candidates.getOrPut(network, ::Candidate).linkProperties = properties
+            publishBestNetwork()
+        }
+
+        override fun onLost(network: Network) {
+            if (preferredNetwork == network) preferredNetwork = null
+            publishBestNetwork()
+        }
+    }
+
     private fun publishBestNetwork() {
         val currentNetwork = activeState?.network
         val nextState = candidates
@@ -102,6 +133,7 @@ internal class DefaultNetworkMonitor(
                     hasCellular = state.capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
                     isMetered = !state.capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED),
                     isCurrent = state.network == currentNetwork,
+                    isSystemPreferred = state.network == preferredNetwork,
                 )
             }
 
@@ -128,14 +160,19 @@ internal class DefaultNetworkMonitor(
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
                 .build()
-            if (tracksBestNetworkOnly) {
+            // Keep every physical candidate available so a validated cellular network can
+            // replace fading Wi-Fi before Android reports the old network as fully lost.
+            connectivity.registerNetworkCallback(
+                request,
+                callback,
+                Handler(Looper.getMainLooper()),
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 connectivity.registerBestMatchingNetworkCallback(
                     request,
-                    callback,
+                    preferredCallback,
                     Handler(Looper.getMainLooper()),
                 )
-            } else {
-                connectivity.registerNetworkCallback(request, callback)
             }
         }.onFailure {
             Log.e(TAG, "Failed to register physical network callback", it)
@@ -150,7 +187,15 @@ internal class DefaultNetworkMonitor(
         }.onFailure {
             Log.e(TAG, "Failed to unregister physical network callback", it)
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            runCatching {
+                connectivity.unregisterNetworkCallback(preferredCallback)
+            }.onFailure {
+                Log.e(TAG, "Failed to unregister preferred network callback", it)
+            }
+        }
         activeState = null
+        preferredNetwork = null
         candidates.clear()
     }
 

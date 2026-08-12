@@ -427,7 +427,10 @@ impl VpnEngine {
         let mut runtime_config = serde_json::from_str::<serde_json::Value>(config)
             .map_err(|error| format!("Некорректная конфигурация: {error}"))?;
         #[cfg(windows)]
-        if let Some(interface) = physical_default_interface() {
+        {
+            let interface = physical_default_interface().ok_or_else(|| {
+                "Не удалось определить активное физическое подключение к интернету".to_string()
+            })?;
             set_default_interface(&mut runtime_config, &interface);
         }
         let runtime_config =
@@ -1150,31 +1153,80 @@ fn set_default_interface(config: &mut serde_json::Value, interface: &str) {
 
 #[cfg(windows)]
 fn physical_default_interface() -> Option<String> {
-    use std::{mem::zeroed, thread};
+    use std::{collections::HashMap, ffi::c_void, mem::zeroed, ptr, slice, thread};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
-        GetBestInterface, GetIfEntry2, MIB_IF_ROW2,
+        FreeMibTable, GetIfTable2, GetIpForwardTable2, GetIpInterfaceEntry,
+        InitializeIpInterfaceEntry, MIB_IF_ROW2, MIB_IF_TABLE2, MIB_IPFORWARD_ROW2,
+        MIB_IPFORWARD_TABLE2, MIB_IPINTERFACE_ROW,
     };
+    use windows_sys::Win32::NetworkManagement::Ndis::{IfOperStatusUp, MediaConnectStateConnected};
+    use windows_sys::Win32::Networking::WinSock::AF_INET;
 
-    let destination = u32::from_ne_bytes([1, 1, 1, 1]);
     for _ in 0..PHYSICAL_INTERFACE_RETRY_ATTEMPTS {
-        let mut index = 0_u32;
-        if unsafe { GetBestInterface(destination, &mut index) } != 0 || index == 0 {
-            return None;
+        let mut route_table: *mut MIB_IPFORWARD_TABLE2 = ptr::null_mut();
+        let mut default_routes = HashMap::new();
+        if unsafe { GetIpForwardTable2(AF_INET, &mut route_table) } == 0 && !route_table.is_null() {
+            unsafe {
+                let routes: &[MIB_IPFORWARD_ROW2] = slice::from_raw_parts(
+                    (*route_table).Table.as_ptr(),
+                    (*route_table).NumEntries as usize,
+                );
+                for route in routes
+                    .iter()
+                    .filter(|route| route.DestinationPrefix.PrefixLength == 0)
+                {
+                    default_routes
+                        .entry(route.InterfaceIndex)
+                        .and_modify(|metric: &mut u32| *metric = (*metric).min(route.Metric))
+                        .or_insert(route.Metric);
+                }
+                FreeMibTable(route_table.cast::<c_void>());
+            }
         }
 
-        let mut interface: MIB_IF_ROW2 = unsafe { zeroed() };
-        interface.InterfaceIndex = index;
-        if unsafe { GetIfEntry2(&mut interface) } != 0 {
-            return None;
-        }
-        let alias_length = interface
-            .Alias
-            .iter()
-            .position(|character| *character == 0)
-            .unwrap_or(interface.Alias.len());
-        let alias = String::from_utf16_lossy(&interface.Alias[..alias_length]);
-        if !alias.is_empty() && !is_tunnel_interface(interface.Type, &alias) {
-            return Some(alias);
+        let mut table: *mut MIB_IF_TABLE2 = ptr::null_mut();
+        if unsafe { GetIfTable2(&mut table) } == 0 && !table.is_null() {
+            let mut candidates = Vec::new();
+            unsafe {
+                let rows: &[MIB_IF_ROW2] =
+                    slice::from_raw_parts((*table).Table.as_ptr(), (*table).NumEntries as usize);
+                for interface in rows {
+                    let alias_length = interface
+                        .Alias
+                        .iter()
+                        .position(|character| *character == 0)
+                        .unwrap_or(interface.Alias.len());
+                    let alias = String::from_utf16_lossy(&interface.Alias[..alias_length]);
+                    if alias.is_empty()
+                        || interface.OperStatus != IfOperStatusUp
+                        || interface.MediaConnectState != MediaConnectStateConnected
+                        || is_tunnel_interface(interface.Type, &alias)
+                        || is_virtual_interface(&alias)
+                    {
+                        continue;
+                    }
+
+                    let mut ip_interface: MIB_IPINTERFACE_ROW = zeroed();
+                    InitializeIpInterfaceEntry(&mut ip_interface);
+                    ip_interface.Family = AF_INET;
+                    ip_interface.InterfaceLuid = interface.InterfaceLuid;
+                    ip_interface.InterfaceIndex = interface.InterfaceIndex;
+                    if GetIpInterfaceEntry(&mut ip_interface) == 0
+                        && ip_interface.Connected != 0
+                        && ip_interface.DisableDefaultRoutes == 0
+                    {
+                        if let Some(route_metric) = default_routes.get(&interface.InterfaceIndex) {
+                            candidates
+                                .push((ip_interface.Metric.saturating_add(*route_metric), alias));
+                        }
+                    }
+                }
+                FreeMibTable(table.cast::<c_void>());
+            }
+            candidates.sort_unstable_by_key(|candidate| candidate.0);
+            if let Some((_, alias)) = candidates.into_iter().next() {
+                return Some(alias);
+            }
         }
         thread::sleep(PHYSICAL_INTERFACE_RETRY_DELAY);
     }
@@ -1198,6 +1250,23 @@ fn is_tunnel_interface(interface_type: u32, alias: &str) -> bool {
         "openvpn",
         "vpn",
         "tap",
+    ]
+    .iter()
+    .any(|marker| alias.contains(marker))
+}
+
+#[cfg(windows)]
+fn is_virtual_interface(alias: &str) -> bool {
+    let alias = alias.to_ascii_lowercase();
+    [
+        "vethernet",
+        "hyper-v",
+        "virtualbox",
+        "vmware",
+        "docker",
+        "container",
+        "loopback",
+        "bluetooth",
     ]
     .iter()
     .any(|marker| alias.contains(marker))
@@ -1261,7 +1330,10 @@ pub(crate) fn read_vpn_network_stats() -> Result<VpnNetworkStats, String> {
 
 #[cfg(test)]
 mod log_tests {
-    use super::{is_tunnel_interface, last_log_message, set_default_interface, EngineState};
+    use super::{
+        is_tunnel_interface, is_virtual_interface, last_log_message, set_default_interface,
+        EngineState,
+    };
 
     #[test]
     fn runtime_config_is_bound_to_the_physical_interface() {
@@ -1288,6 +1360,14 @@ mod log_tests {
             "Realtek PCIe GbE Family Controller"
         ));
         assert!(!is_tunnel_interface(71, "Wi-Fi"));
+    }
+
+    #[test]
+    fn virtual_adapters_are_not_selected_as_the_physical_interface() {
+        assert!(is_virtual_interface("vEthernet (Default Switch)"));
+        assert!(is_virtual_interface("VMware Network Adapter VMnet8"));
+        assert!(!is_virtual_interface("Ethernet"));
+        assert!(!is_virtual_interface("Wi-Fi"));
     }
 
     #[test]

@@ -96,6 +96,29 @@ class ConnectionRecoveryPolicyTest {
     }
 
     @Test
+    fun `system preferred cellular beats fading validated wifi during handover`() {
+        val fadingWifi = physicalNetworkPriority(
+            isValidated = true,
+            hasEthernet = false,
+            hasWifi = true,
+            hasCellular = false,
+            isMetered = false,
+            isCurrent = true,
+        )
+        val preferredCellular = physicalNetworkPriority(
+            isValidated = true,
+            hasEthernet = false,
+            hasWifi = false,
+            hasCellular = true,
+            isMetered = true,
+            isCurrent = false,
+            isSystemPreferred = true,
+        )
+
+        assertTrue(preferredCellular > fadingWifi)
+    }
+
+    @Test
     fun `network callback bursts use a short debounce window`() {
         assertEquals(350L, NETWORK_CHANGE_DEBOUNCE_MS)
     }

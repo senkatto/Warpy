@@ -1230,7 +1230,9 @@ let updateCheckRunning = false;
 let updateInstallRunning = false;
 let updateUiState = { kind: 'idle', version: '', percent: null };
 let dismissedUpdateVersion = '';
-const UPDATE_AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+let lastAutomaticUpdateCheckAt = 0;
+const UPDATE_AUTO_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+const UPDATE_AUTO_CHECK_MIN_GAP_MS = 5 * 60 * 1000;
 
 function renderUpdateControl() {
   const button = $('btn-check-update');
@@ -1324,13 +1326,13 @@ async function bindUpdateProgressEvents() {
 
 async function checkForUpdate({ silent = false } = {}) {
   if (updateCheckRunning || updateInstallRunning) return;
-  pendingUpdate = null;
   updateCheckRunning = true;
   if (!silent) updateUiState = { kind: 'checking', version: '', percent: null };
   renderUpdateControl();
   try {
     const update = await invoke('check_for_update');
     if (!update) {
+      pendingUpdate = null;
       if (!silent) updateUiState = { kind: 'latest', version: '', percent: null };
     } else {
       pendingUpdate = {
@@ -1352,9 +1354,17 @@ async function checkForUpdate({ silent = false } = {}) {
   }
 }
 
+function checkForUpdateAutomatically() {
+  const now = Date.now();
+  if (now - lastAutomaticUpdateCheckAt < UPDATE_AUTO_CHECK_MIN_GAP_MS) return;
+  lastAutomaticUpdateCheckAt = now;
+  void checkForUpdate({ silent: true });
+}
+
 function startAutomaticUpdateChecks() {
-  setTimeout(() => { void checkForUpdate({ silent: true }); }, 12_000);
-  setInterval(() => { void checkForUpdate({ silent: true }); }, UPDATE_AUTO_CHECK_INTERVAL_MS);
+  setTimeout(checkForUpdateAutomatically, 12_000);
+  setInterval(checkForUpdateAutomatically, UPDATE_AUTO_CHECK_INTERVAL_MS);
+  window.addEventListener('online', checkForUpdateAutomatically);
 }
 
 async function installPendingUpdate() {
@@ -3681,6 +3691,7 @@ document.addEventListener('visibilitychange', () => {
   isWindowVisible = !document.hidden;
   if (isWindowVisible) {
     scheduleAutomaticSubscriptionRefresh();
+    checkForUpdateAutomatically();
     void verifyConnectionAfterResume();
     let shouldAnimate = false;
     if (S.status === 'connecting') {

@@ -96,6 +96,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val vpnCommands = VpnCommandCoordinator(application, viewModelScope)
     private val updater = WarpyUpdater(application)
     private var pendingRelease: AndroidRelease? = null
+    private var lastAutomaticUpdateCheckAt = 0L
+    private var updateCheckInFlight = false
 
     init {
         handler.post { regenerateConfig() }
@@ -104,41 +106,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             delay(12_000)
             while (true) {
                 checkForUpdates(silent = true)
-                delay(6 * 60 * 60 * 1000L)
+                delay(15 * 60 * 1000L)
             }
         }
     }
 
     fun checkForUpdates(silent: Boolean = false) {
-        if (_state.value.update.stage in setOf(UpdateStage.Checking, UpdateStage.Downloading)) return
+        if (updateCheckInFlight || _state.value.update.stage == UpdateStage.Downloading) return
+        if (silent) {
+            val now = SystemClock.elapsedRealtime()
+            if (lastAutomaticUpdateCheckAt != 0L && now - lastAutomaticUpdateCheckAt < 5 * 60 * 1000L) return
+            lastAutomaticUpdateCheckAt = now
+        }
+        updateCheckInFlight = true
         if (!silent) {
             _state.value = _state.value.copy(update = UpdateUiState(stage = UpdateStage.Checking))
         }
         viewModelScope.launch {
-            runCatching { updater.check() }
-                .onSuccess { release ->
-                    pendingRelease = release
-                    if (release != null) {
-                        _state.value = _state.value.copy(
-                            update = UpdateUiState(
-                                stage = UpdateStage.Available,
-                                version = release.version,
-                            ),
-                        )
-                    } else if (!silent) {
-                        _state.value = _state.value.copy(update = UpdateUiState())
+            try {
+                runCatching { updater.check() }
+                    .onSuccess { release ->
+                        pendingRelease = release
+                        if (release != null) {
+                            _state.value = _state.value.copy(
+                                update = UpdateUiState(
+                                    stage = UpdateStage.Available,
+                                    version = release.version,
+                                ),
+                            )
+                        } else if (!silent) {
+                            _state.value = _state.value.copy(update = UpdateUiState())
+                        }
                     }
-                }
-                .onFailure { error ->
-                    if (!silent) {
-                        _state.value = _state.value.copy(
-                            update = UpdateUiState(
-                                stage = UpdateStage.Error,
-                                message = error.message.orEmpty(),
-                            ),
-                        )
+                    .onFailure { error ->
+                        if (!silent) {
+                            _state.value = _state.value.copy(
+                                update = UpdateUiState(
+                                    stage = UpdateStage.Error,
+                                    message = error.message.orEmpty(),
+                                ),
+                            )
+                        }
                     }
-                }
+            } finally {
+                updateCheckInFlight = false
+            }
         }
     }
 

@@ -409,6 +409,7 @@ private fun WarpyApp(viewModel: MainViewModel = viewModel()) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 mainHandler.post(deferredStatusQuery)
+                viewModel.checkForUpdates(silent = true)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

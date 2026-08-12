@@ -588,6 +588,33 @@ test('desktop updates are signed, user-confirmed and constrained to release chan
   assert.doesNotMatch(prepareReleaseAssets, /\bgit\b.*rev-parse/i);
 });
 
+test('both clients discover updates while they remain open', async () => {
+  const frontend = await readFile(path.join(projectRoot, 'src/index.js'), 'utf8');
+  const androidViewModel = await readFile(
+    path.join(projectRoot, '../app/src/main/java/com/warpy/app/MainViewModel.kt'),
+    'utf8',
+  );
+  const androidActivity = await readFile(
+    path.join(projectRoot, '../app/src/main/java/com/warpy/app/MainActivity.kt'),
+    'utf8',
+  );
+
+  assert.match(frontend, /UPDATE_AUTO_CHECK_INTERVAL_MS = 15 \* 60 \* 1000/);
+  assert.match(frontend, /setInterval\(checkForUpdateAutomatically, UPDATE_AUTO_CHECK_INTERVAL_MS\)/);
+  assert.match(frontend, /window\.addEventListener\('online', checkForUpdateAutomatically\)/);
+  assert.match(frontend, /visibilitychange[\s\S]*checkForUpdateAutomatically\(\)/);
+  assert.match(frontend, /if \(!update\) \{\s*pendingUpdate = null/);
+  assert.doesNotMatch(
+    frontend.slice(frontend.indexOf('async function checkForUpdate'), frontend.indexOf('try {', frontend.indexOf('async function checkForUpdate'))),
+    /pendingUpdate = null/,
+  );
+
+  assert.match(androidViewModel, /delay\(15 \* 60 \* 1000L\)/);
+  assert.match(androidViewModel, /lastAutomaticUpdateCheckAt/);
+  assert.match(androidViewModel, /updateCheckInFlight/);
+  assert.match(androidActivity, /Lifecycle\.Event\.ON_RESUME[\s\S]*checkForUpdates\(silent = true\)/);
+});
+
 test('failed first launch restores the previous signed installation locally', async () => {
   const frontend = await readFile(path.join(projectRoot, 'src/index.js'), 'utf8');
   const main = await readFile(path.join(projectRoot, 'src-tauri/src/main.rs'), 'utf8');

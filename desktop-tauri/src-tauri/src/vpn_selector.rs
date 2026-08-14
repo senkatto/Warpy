@@ -17,7 +17,7 @@ const SELECTOR_TAG: &str = "proxy";
 const CONTROLLER_TIMEOUT: Duration = Duration::from_secs(2);
 const PROBE_TIMEOUT_MS: u64 = 4_000;
 const PROBE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
-const PROBE_URL: &str = "https%3A%2F%2Fwww.google.com%2Fgenerate_204";
+const PROBE_URL: &str = "https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204";
 const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug)]

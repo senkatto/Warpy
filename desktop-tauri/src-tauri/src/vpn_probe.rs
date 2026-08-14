@@ -9,7 +9,7 @@ use windows_sys::Win32::Networking::WinHttp::{
     WINHTTP_FLAG_SECURE, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
 };
 
-const PROBE_SERVER: &str = "www.google.com";
+const PROBE_SERVER: &str = "www.gstatic.com";
 const PROBE_PATH: &str = "/generate_204";
 const PROBE_ATTEMPTS: usize = 3;
 const PROBE_RETRY_DELAY: Duration = Duration::from_millis(600);

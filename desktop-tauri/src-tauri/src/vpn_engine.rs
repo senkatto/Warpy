@@ -590,7 +590,7 @@ impl VpnEngine {
         // The Clash delay endpoint can transiently return 503 even when the
         // selected tunnel is already carrying traffic. Trust a successful
         // end-to-end request before deciding to tear the tunnel down.
-        if verify_tunnel_once().is_ok() {
+        if verify_tunnel().is_ok() {
             return Ok(());
         }
         Err(last_error)

@@ -20,6 +20,7 @@ internal data class TunnelValidationRequest(
     val readTimeoutMillis: Int,
     val retryDelayMillis: Long = 750L,
     val url: String = DEFAULT_TUNNEL_VALIDATION_URL,
+    val fallbackUrls: List<String> = listOf(DEFAULT_TUNNEL_VALIDATION_FALLBACK_URL),
 )
 
 internal data class TunnelValidationAttempt(
@@ -44,6 +45,8 @@ internal class HttpTunnelValidator : TunnelValidator {
         require(request.maxAttempts > 0) { "maxAttempts must be positive" }
         require(request.connectTimeoutMillis > 0) { "connectTimeoutMillis must be positive" }
         require(request.readTimeoutMillis > 0) { "readTimeoutMillis must be positive" }
+        val validationUrls = (listOf(request.url) + request.fallbackUrls).distinct()
+        require(validationUrls.isNotEmpty()) { "at least one validation URL is required" }
 
         val authorization = request.proxy.basicAuthorization()
         val proxy = Proxy(
@@ -67,11 +70,12 @@ internal class HttpTunnelValidator : TunnelValidator {
             .build()
         val attempts = mutableListOf<TunnelValidationAttempt>()
 
-        repeat(request.maxAttempts) {
+        repeat(request.maxAttempts) { attemptIndex ->
             currentCoroutineContext().ensureActive()
             try {
+                val validationUrl = validationUrls[attemptIndex % validationUrls.size]
                 val code = client.newCall(
-                    Request.Builder().url(request.url).get().build(),
+                    Request.Builder().url(validationUrl).get().build(),
                 ).awaitStatusCode()
                 attempts += TunnelValidationAttempt(statusCode = code)
                 if (code in 200..399) {
@@ -99,3 +103,4 @@ private fun LocalProxyConfig.basicAuthorization(): String {
 }
 
 private const val DEFAULT_TUNNEL_VALIDATION_URL = "https://www.gstatic.com/generate_204"
+private const val DEFAULT_TUNNEL_VALIDATION_FALLBACK_URL = "http://www.gstatic.com/generate_204"

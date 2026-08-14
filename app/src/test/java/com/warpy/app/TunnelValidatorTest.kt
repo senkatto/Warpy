@@ -57,6 +57,28 @@ class TunnelValidatorTest {
     }
 
     @Test
+    fun `uses a fallback URL after the primary probe fails`() = runBlocking {
+        MockWebServer().use { proxy ->
+            proxy.enqueue(MockResponse().setResponseCode(503))
+            proxy.enqueue(MockResponse().setResponseCode(204))
+            proxy.start()
+
+            val result = HttpTunnelValidator().validate(
+                request(proxy.port).copy(
+                    maxAttempts = 2,
+                    retryDelayMillis = 1L,
+                    url = "https://primary.warpy.test/generate_204",
+                    fallbackUrls = listOf("http://fallback.warpy.test/generate_204"),
+                ),
+            )
+
+            assertTrue(result.isValid)
+            assertTrue(proxy.takeRequest().requestLine.contains("primary.warpy.test"))
+            assertTrue(proxy.takeRequest().requestLine.contains("fallback.warpy.test"))
+        }
+    }
+
+    @Test
     fun `returns a typed failure after the bounded attempts`() = runBlocking {
         MockWebServer().use { proxy ->
             proxy.enqueue(MockResponse().setResponseCode(503))

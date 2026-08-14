@@ -587,7 +587,6 @@ function buildProxyOutbound(profile, tag = TAGS.proxy) {
       enabled: true,
       server_name: profile.sni || profile.host,
       insecure: Boolean(profile.insecure),
-      ...(profile.alpn?.length ? { alpn: profile.alpn } : {}),
     };
   } else if (profile.protocol === 'tuic') {
     outbound.uuid = profile.uuid;
@@ -761,7 +760,9 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
   }
 
   const rules = [];
-  const blockQuic = settings.quic === true;
+  // The sing-box Naive outbound is TCP-only. Reject browser QUIC immediately so
+  // clients fall back to HTTP/2 instead of retrying an unsupported UDP path.
+  const blockQuic = settings.quic === true || profile.protocol === 'naive';
   if (blockQuic && ROUTING.blockQuicOnlyWhenEnabled) {
     rules.push({
       process_name: QUIC_BROWSER_PROCESSES,

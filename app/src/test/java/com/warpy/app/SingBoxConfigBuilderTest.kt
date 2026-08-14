@@ -71,6 +71,30 @@ class SingBoxConfigBuilderTest {
     }
 
     @Test
+    fun `naive https leaves protocol negotiation to cronet`() {
+        val naive = ProfileParser.parse(
+            "naive+https://alice:secret@naive.example.com:443#Naive",
+        ).getOrThrow()
+        val outbound = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(naive))))
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+
+        assertFalse(outbound.getBoolean("quic"))
+        assertFalse(outbound.getJSONObject("tls").has("alpn"))
+
+        val rules = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(naive))))
+            .getJSONObject("route")
+            .getJSONArray("rules")
+        assertTrue(
+            (0 until rules.length()).any { index ->
+                rules.getJSONObject(index).optString("network") == "udp" &&
+                    rules.getJSONObject(index).optInt("port") == 443 &&
+                    rules.getJSONObject(index).optString("outbound") == "block"
+            },
+        )
+    }
+
+    @Test
     fun `regular config does not expose a local proxy`() {
         val root = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(profile))))
         val inbounds = root.getJSONArray("inbounds")
@@ -113,6 +137,22 @@ class SingBoxConfigBuilderTest {
             .first { it.optString("tag") == "proxy" }
 
         assertTrue(selector.getBoolean("interrupt_exist_connections"))
+    }
+
+    @Test
+    fun `selector starts with the active profile`() {
+        val profiles = listOf(profile, profile.copy(name = "Second"))
+        val root = JSONObject(
+            SingBoxConfigBuilder.build(
+                AppSettings(profiles = profiles, activeProfileIndex = 1),
+            ),
+        )
+        val outbounds = root.getJSONArray("outbounds")
+        val selector = (0 until outbounds.length())
+            .map(outbounds::getJSONObject)
+            .first { it.optString("tag") == "proxy" }
+
+        assertEquals("profile_1", selector.getString("default"))
     }
 
     @Test
@@ -255,6 +295,16 @@ class SingBoxConfigBuilderTest {
         val root = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(profile))))
 
         assertTrue(root.getJSONObject("route").getBoolean("auto_detect_interface"))
+    }
+
+    @Test
+    fun `profile hostnames resolve outside the tunnel`() {
+        val route = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(profile))))
+            .getJSONObject("route")
+        val resolver = route.getJSONObject("default_domain_resolver")
+
+        assertEquals("local", resolver.getString("server"))
+        assertEquals("ipv4_only", resolver.getString("strategy"))
     }
 
     @Test

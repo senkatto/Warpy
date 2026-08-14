@@ -133,7 +133,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     private val wakeProbeJobOwner = CancellableJobOwner(serviceScope)
     private val tunnelWatchdogJobOwner = CancellableJobOwner(serviceScope)
     private val networkChangeJobOwner = CancellableJobOwner(serviceScope)
-    @Volatile private var lastTunnelTrafficAt = 0L
     private val serviceHandler = Handler(Looper.getMainLooper())
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
     private val dnsExecutor: ExecutorService = Executors.newCachedThreadPool()
@@ -1117,9 +1116,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             )
             if (isValid) {
                 Log.i(TAG, "wake tunnel check succeeded")
-                if (shouldResetConnectionsAfterSleep(screenOffMillis)) {
-                    closeTunnelConnections("$reason/after-${screenOffMillis}ms-sleep")
-                }
             } else {
                 Log.w(TAG, "wake tunnel check failed; scheduling bounded recovery")
                 val runtime = sessionRuntime()
@@ -1637,7 +1633,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private fun startTunnelWatchdog() {
         if (!stabilityMode) return
-        lastTunnelTrafficAt = SystemClock.elapsedRealtime()
         tunnelWatchdogJobOwner.launch {
             var consecutiveFailures = 0
             while (currentCoroutineContext().isActive) {
@@ -1651,11 +1646,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
                     continue
                 }
 
-                val now = SystemClock.elapsedRealtime()
-                if (now - lastTunnelTrafficAt < TUNNEL_WATCHDOG_INTERVAL_MS) {
-                    consecutiveFailures = 0
-                    continue
-                }
                 if (findUpstreamNetwork() == null) {
                     consecutiveFailures = 0
                     continue
@@ -1706,9 +1696,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         override fun writeLogs(logs: LogIterator?) = Unit
         override fun writeStatus(message: StatusMessage?) {
             if (message == null) return
-            if (message.downlink > 0L || message.uplink > 0L) {
-                lastTunnelTrafficAt = SystemClock.elapsedRealtime()
-            }
             sendBroadcast(
                 Intent(ACTION_STATS)
                     .setPackage(packageName)

@@ -50,9 +50,6 @@ internal fun physicalNetworkPriority(
         (if (isCurrent) 5 else 0)
 }
 
-internal fun shouldResetConnectionsAfterSleep(screenOffMillis: Long): Boolean =
-    screenOffMillis >= STALE_CONNECTION_RESET_THRESHOLD_MS
-
 internal fun shouldRetryCommandHandshake(failedAttempts: Int, elapsedMillis: Long): Boolean =
     failedAttempts < MAX_COMMAND_HANDSHAKE_ATTEMPTS && elapsedMillis < COMMAND_HANDSHAKE_TIMEOUT_MS
 
@@ -60,4 +57,3 @@ internal const val NETWORK_CHANGE_DEBOUNCE_MS = 350L
 internal const val MAX_COMMAND_HANDSHAKE_ATTEMPTS = 20
 internal const val COMMAND_HANDSHAKE_RETRY_DELAY_MS = 100L
 private const val COMMAND_HANDSHAKE_TIMEOUT_MS = 5_000L
-private const val STALE_CONNECTION_RESET_THRESHOLD_MS = 30_000L

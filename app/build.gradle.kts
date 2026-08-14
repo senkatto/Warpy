@@ -1,5 +1,6 @@
 import java.io.File
 import java.security.MessageDigest
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -7,8 +8,19 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val localProps = Properties().apply {
+    val propFile = rootProject.file("local.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { stream ->
+            load(stream)
+        }
+    }
+}
+
 fun releaseValue(name: String): String? =
-    providers.gradleProperty(name).orNull ?: providers.environmentVariable(name).orNull
+    providers.gradleProperty(name).orNull
+        ?: providers.environmentVariable(name).orNull
+        ?: localProps.getProperty(name)
 
 val releaseStoreFile = releaseValue("RELEASE_STORE_FILE")
 val releaseStorePassword = releaseValue("RELEASE_STORE_PASSWORD")
@@ -20,7 +32,7 @@ val productionSigningConfigured = releaseStoreFile != null &&
     releaseKeyPassword != null &&
     file(releaseStoreFile).exists()
 
-val hiddifyCoreAarSha256 = "BBEC0241E364E679BE1EB33801FE118386137C27D4AF74DAA45F6898B16A7AF3"
+val hiddifyCoreAarSha256 = "85033049DBED46BB5528A4A258BABA861FCDB51CD4724427A82DDF7922D9ED0C"
 val hiddifyCoreAar = layout.projectDirectory.file("libs/hiddify-core.aar").asFile
 
 fun File.sha256(): String {

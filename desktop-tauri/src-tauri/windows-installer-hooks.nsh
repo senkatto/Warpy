@@ -60,9 +60,11 @@ Var WarpyUserDataDir
   IfFileExists "$INSTDIR\${MAINBINARYNAME}.exe" 0 service_binary_missing
     ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --uninstall-service' $0
     ${If} $0 != 0
-      RMDir /r "$WarpyRollbackDir"
-      MessageBox MB_ICONSTOP "Не удалось подготовить системную службу Warpy к обновлению. Перезагрузите Windows и повторите установку."
-      Abort
+      nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${WARPY_SERVICE_NAME}"'
+      Pop $0
+      nsExec::ExecToLog '"$SYSDIR\sc.exe" delete "${WARPY_SERVICE_NAME}"'
+      Pop $0
+      Sleep 1000
     ${EndIf}
     Goto service_stopped
   service_binary_missing:

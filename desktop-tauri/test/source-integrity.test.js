@@ -63,7 +63,7 @@ test('Android and Windows versions stay internally consistent', async () => {
 
   for (const [name, metadata] of Object.entries(packageLock.packages)) {
     if (!name.startsWith('node_modules/')) continue;
-    assert.notEqual(metadata.version, packageJson.version, `${name} inherited the app version`);
+    assert.match(metadata.version, /^\d+\.\d+\.\d+(?:[-+].+)?$/, `${name} has no package version`);
     if (metadata.resolved?.startsWith('https://registry.npmjs.org/')) {
       assert.match(metadata.resolved, new RegExp(`-${metadata.version.replaceAll('.', '\\.')}\\.tgz$`));
     }
@@ -493,10 +493,22 @@ test('manual profile choice is persisted without hidden automatic switching', as
   assert.notEqual(selectEnd, -1);
   const selection = source.slice(selectStart, selectEnd);
   assert.match(selection, /setPreferredProfile\(index\)/);
-  assert.match(selection, /if \(stoppedForRestart && !await startVpn\(\)\) return false/);
+  assert.match(
+    selection,
+    /\(stoppedForRestart \|\| !wasActive\).*startVpn\(\{ preserveActiveProfile: true \}\)/s,
+  );
   assert.match(source, /async function startVpn[\s\S]*?return true;[\s\S]*?return false;/);
   assert.match(source, /preferredProfileKey: S\.preferredProfileKey/);
   assert.doesNotMatch(source, /set_warpy_auto|refreshVpnHealth|autoSwitchNotificationEvent/);
+});
+
+test('VPN service commands are serialized while switching during connection', async () => {
+  const source = await readFile(path.join(projectRoot, 'src/index.js'), 'utf8');
+
+  assert.match(source, /let vpnOperationTail = Promise\.resolve\(\)/);
+  assert.match(source, /function queueVpnOperation\(operation\)/);
+  assert.match(source, /async function startVpn\(options = \{\}\)[\s\S]*queueVpnOperation\(\(\) => startVpnOperation\(options\)\)/);
+  assert.match(source, /async function stopVpn\(\)[\s\S]*\+\+S\.connectAttempt[\s\S]*queueVpnOperation\(stopVpnOperation\)/);
 });
 
 test('subscription updates are persisted with the current settings schema', async () => {

@@ -121,6 +121,7 @@ class TunnelValidatorTest {
         connectTimeoutMillis = 2_000,
         readTimeoutMillis = 2_000,
         url = "http://probe.warpy.test/generate_204",
+        fallbackUrls = emptyList(),
     )
 
     private fun expectedAuthorization(): String {

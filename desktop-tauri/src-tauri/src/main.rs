@@ -50,6 +50,8 @@ const MAX_VPN_CONFIG_BYTES: usize = 768 * 1024;
 const MAX_SETTINGS_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PROTECTED_SETTINGS_BYTES: usize = MAX_SETTINGS_BYTES + 64 * 1024;
 const MAX_LOG_MESSAGE_CHARS: usize = 2_048;
+#[cfg(windows)]
+static SERVICE_IPC_LOCK: Mutex<()> = Mutex::new(());
 
 fn ensure_text_size(value: &str, max_bytes: usize, label: &str) -> Result<(), String> {
     if value.len() > max_bytes {
@@ -281,6 +283,23 @@ async fn stop_vpn() -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn cancel_vpn_start() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let response = tauri::async_runtime::spawn_blocking(|| {
+            vpn_ipc::call(&vpn_ipc::VpnRequest::CancelStart)
+        })
+            .await
+            .map_err(|error| format!("VPN cancellation failed: {error}"))?;
+        response??;
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    Ok(())
+}
+
+#[tauri::command]
 async fn start_vpn(config: String, kill_switch: bool) -> Result<(), String> {
     ensure_text_size(&config, MAX_VPN_CONFIG_BYTES, "VPN configuration")?;
     #[cfg(windows)]
@@ -428,6 +447,9 @@ fn remove_legacy_autostart_entry() -> Result<(), String> {
 
 #[cfg(windows)]
 fn service_call(request: vpn_ipc::VpnRequest) -> Result<serde_json::Value, String> {
+    let _guard = SERVICE_IPC_LOCK
+        .lock()
+        .map_err(|_| "VPN service IPC lock is unavailable".to_string())?;
     if !matches!(&request, vpn_ipc::VpnRequest::AttachUi { .. }) {
         vpn_ipc::call(&vpn_ipc::VpnRequest::AttachUi {
             process_id: std::process::id(),
@@ -756,6 +778,7 @@ fn run_app(
             forget_vpn_outbound,
             switch_vpn_outbound,
             stop_vpn,
+            cancel_vpn_start,
             set_resume_on_boot,
             update_tray_menu,
             is_autostart_launch,

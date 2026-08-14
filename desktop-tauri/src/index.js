@@ -553,6 +553,7 @@ const S = {
   statusCheckRunning: false,
   statusCheckFailures: 0,
   startCommandAttempt: 0,
+  startCommandDispatched: false,
   networkMetricsRunning: false,
   resumeCheckRunning: false,
   connectAttempt: 0,
@@ -2517,7 +2518,9 @@ async function selectProfile(index, { closeProfiles = true } = {}) {
 
   syncUI();
   if (closeProfiles) hide('overlay-profiles');
-  if (stoppedForRestart && !await startVpn()) return false;
+  if ((stoppedForRestart || !wasActive) && !await startVpn({ preserveActiveProfile: true })) {
+    return false;
+  }
   return true;
 }
 
@@ -2852,6 +2855,14 @@ function makeConfig() {
 }
 
 /* ── VPN control ───────────────────────────────── */
+let vpnOperationTail = Promise.resolve();
+
+function queueVpnOperation(operation) {
+  const result = vpnOperationTail.then(operation, operation);
+  vpnOperationTail = result.catch(() => {});
+  return result;
+}
+
 async function toggleVpn() {
   if (!S.profiles.length) { show('overlay-add'); return; }
   if (S.status === 'connected' || S.status === 'connecting' || S.status === 'error') {
@@ -2887,7 +2898,11 @@ async function startVpnAfterSystemBoot() {
   }
 }
 
-async function startVpn({ reportFailure = true, preserveActiveProfile = false } = {}) {
+async function startVpn(options = {}) {
+  return queueVpnOperation(() => startVpnOperation(options));
+}
+
+async function startVpnOperation({ reportFailure = true, preserveActiveProfile = false } = {}) {
   if (!preserveActiveProfile) restorePreferredProfileSelection();
   const attempt = ++S.connectAttempt;
   S.startCommandAttempt = attempt;
@@ -2898,9 +2913,12 @@ async function startVpn({ reportFailure = true, preserveActiveProfile = false } 
   syncUI();
   try {
     const snapshot = await getVpnRuntimeSnapshot();
+    if (attempt !== S.connectAttempt) return false;
     if (snapshot.competingVpn) throw new Error(t('otherVpnActive'));
     const runtime = makeConfig();
     S.runtimeProfileKeys = [];
+    if (attempt !== S.connectAttempt) return false;
+    S.startCommandDispatched = true;
     await invoke('start_vpn', {
       config: runtime.config,
       killSwitch: S.killSwitch,
@@ -2943,17 +2961,40 @@ async function startVpn({ reportFailure = true, preserveActiveProfile = false } 
     return false;
   } finally {
     if (S.startCommandAttempt === attempt) S.startCommandAttempt = 0;
+    if (S.connectAttempt === attempt) S.startCommandDispatched = false;
     if (S.commandPending === 'start') S.commandPending = null;
     syncUI();
   }
 }
 
 async function stopVpn() {
+  const wasConnecting = S.status === 'connecting';
   ++S.connectAttempt;
   S.startCommandAttempt = 0;
   S.commandPending = 'stop';
   S.commandError = '';
   syncUI();
+  if (wasConnecting) {
+    try {
+      if (S.startCommandDispatched) await invoke('cancel_vpn_start');
+      S.startCommandDispatched = false;
+      S.commandPending = null;
+      S.status = 'stopped';
+      S.runtimeProfileKeys = [];
+      stopTimers();
+      syncUI();
+      return true;
+    } catch (error) {
+      S.commandPending = null;
+      S.commandError = String(error).replace(/^Error:\s*/, '');
+      syncUI();
+      return false;
+    }
+  }
+  return queueVpnOperation(stopVpnOperation);
+}
+
+async function stopVpnOperation() {
   try {
     await invoke('stop_vpn');
     const snapshot = await getVpnRuntimeSnapshot();

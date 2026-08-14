@@ -4,12 +4,15 @@ import com.warpy.app.vpn.LocalProxyConfig
 import com.warpy.app.vpn.awaitStatusCode
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.Socket
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -93,8 +96,52 @@ internal class HttpTunnelValidator : TunnelValidator {
             }
         }
 
+        if (
+            attempts.any { it.failure != null } &&
+            probeHttpTunnel(
+                proxy = request.proxy,
+                authorization = authorization,
+                connectTimeoutMillis = request.connectTimeoutMillis,
+                readTimeoutMillis = request.readTimeoutMillis,
+            )
+        ) {
+            attempts += TunnelValidationAttempt(statusCode = 200)
+            return TunnelValidationResult(isValid = true, attempts = attempts)
+        }
+
         return TunnelValidationResult(isValid = false, attempts = attempts)
     }
+}
+
+private suspend fun probeHttpTunnel(
+    proxy: LocalProxyConfig,
+    authorization: String,
+    connectTimeoutMillis: Int,
+    readTimeoutMillis: Int,
+): Boolean = withContext(Dispatchers.IO) {
+    runCatching {
+        Socket().use { socket ->
+            socket.connect(
+                InetSocketAddress("127.0.0.1", proxy.port),
+                connectTimeoutMillis,
+            )
+            socket.soTimeout = readTimeoutMillis
+            socket.getOutputStream().bufferedWriter(Charsets.US_ASCII).use { writer ->
+                writer.write("GET $HTTP_PROBE_URL HTTP/1.1\r\n")
+                writer.write("Host: $HTTP_PROBE_HOST\r\n")
+                writer.write("Proxy-Authorization: $authorization\r\n")
+                writer.write("Connection: close\r\n\r\n")
+                writer.flush()
+
+                val statusLine = socket.getInputStream()
+                    .bufferedReader(Charsets.US_ASCII)
+                    .readLine()
+                    .orEmpty()
+                statusLine.startsWith("HTTP/1.1 204 ") ||
+                    statusLine.startsWith("HTTP/1.0 204 ")
+            }
+        }
+    }.getOrDefault(false)
 }
 
 private fun LocalProxyConfig.basicAuthorization(): String {
@@ -103,4 +150,6 @@ private fun LocalProxyConfig.basicAuthorization(): String {
 }
 
 private const val DEFAULT_TUNNEL_VALIDATION_URL = "https://www.gstatic.com/generate_204"
-private const val DEFAULT_TUNNEL_VALIDATION_FALLBACK_URL = "http://www.gstatic.com/generate_204"
+private const val DEFAULT_TUNNEL_VALIDATION_FALLBACK_URL = "https://cp.cloudflare.com/generate_204"
+private const val HTTP_PROBE_URL = "http://cp.cloudflare.com/generate_204"
+private const val HTTP_PROBE_HOST = "cp.cloudflare.com"

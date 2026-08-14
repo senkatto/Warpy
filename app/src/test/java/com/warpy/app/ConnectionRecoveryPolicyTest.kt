@@ -8,7 +8,6 @@ import com.warpy.app.vpn.isHandoverCandidatePhysicalNetwork
 import com.warpy.app.vpn.isUsablePhysicalNetwork
 import com.warpy.app.vpn.physicalNetworkPriority
 import com.warpy.app.vpn.shouldRetryCommandHandshake
-import com.warpy.app.vpn.shouldResetConnectionsAfterSleep
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -121,13 +120,6 @@ class ConnectionRecoveryPolicyTest {
     @Test
     fun `network callback bursts use a short debounce window`() {
         assertEquals(350L, NETWORK_CHANGE_DEBOUNCE_MS)
-    }
-
-    @Test
-    fun `long screen off session resets stale app connections`() {
-        assertFalse(shouldResetConnectionsAfterSleep(29_999L))
-        assertTrue(shouldResetConnectionsAfterSleep(30_000L))
-        assertTrue(shouldResetConnectionsAfterSleep(10 * 60_000L))
     }
 
     @Test

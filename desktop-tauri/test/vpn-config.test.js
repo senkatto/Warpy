@@ -101,11 +101,24 @@ test('builds Naive HTTPS and QUIC outbounds without inventing TLS values', () =>
   assert.equal(httpsOutbound.password, 's@cret');
   assert.equal(httpsOutbound.quic, false);
   assert.equal(httpsOutbound.tls.server_name, 'front.example.com');
-  assert.deepEqual(httpsOutbound.tls.alpn, ['h2', 'http/1.1']);
+  assert.equal(httpsOutbound.tls.alpn, undefined);
   assert.equal(httpsOutbound.tls.utls, undefined);
+  assert.equal(
+    buildSingBoxConfig(httpsProfile).route.rules.some(
+      rule => rule.network === 'udp' && rule.port === 443 && rule.action === 'reject',
+    ),
+    true,
+  );
 
   const quicProfile = parseProfileLink('naive+quic://alice:secret@naive.example.com#Naive QUIC');
   assert.equal(buildSingBoxConfig(quicProfile).outbounds[0].quic, true);
+
+  const defaultHttpsProfile = parseProfileLink(
+    'naive+https://alice:secret@naive.example.com#Naive HTTPS',
+  );
+  const defaultHttpsOutbound = buildSingBoxConfig(defaultHttpsProfile).outbounds[0];
+  assert.equal(defaultHttpsOutbound.quic, false);
+  assert.equal(defaultHttpsOutbound.tls.alpn, undefined);
 });
 
 test('preserves explicit VLESS SNI in the generated TLS config', () => {

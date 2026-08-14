@@ -43,6 +43,7 @@ object SingBoxConfigBuilder {
                 .put("type", "selector")
                 .put("tag", CoreContract.Tags.proxy)
                 .put("outbounds", outboundTags)
+                .put("default", "profile_${settings.activeProfileIndex}")
                 .put("interrupt_exist_connections", true)
         )
 
@@ -55,7 +56,7 @@ object SingBoxConfigBuilder {
             .put("inbounds", inbounds)
             .put("outbounds", outbounds)
             .apply { if (endpoints.length() > 0) put("endpoints", endpoints) }
-            .put("route", route(settings, filesDir))
+            .put("route", route(settings, filesDir, settings.profiles.getOrNull(settings.activeProfileIndex)))
             .toString(2)
     }
 
@@ -144,7 +145,7 @@ object SingBoxConfigBuilder {
             .put("strategy", CoreContract.Dns.strategy)
     }
 
-    private fun route(settings: AppSettings, filesDir: String): JSONObject {
+    private fun route(settings: AppSettings, filesDir: String, activeProfile: VpnProfile?): JSONObject {
         val rules = JSONArray()
             .put(JSONObject().put("protocol", "dns").put("action", "hijack-dns"))
         rules.put(
@@ -186,7 +187,9 @@ object SingBoxConfigBuilder {
                 AppTunnelMode.All -> Unit
             }
         }
-        val blockQuic = settings.blockQuic
+        // The sing-box Naive outbound is TCP-only. Reject browser QUIC immediately so
+        // clients fall back to HTTP/2 instead of retrying an unsupported UDP path.
+        val blockQuic = settings.blockQuic || activeProfile?.protocol == Protocol.Naive
         if (!CoreContract.Routing.blockQuicOnlyWhenEnabled || blockQuic) {
             rules.put(
                 JSONObject()
@@ -209,6 +212,12 @@ object SingBoxConfigBuilder {
                 } else {
                     CoreContract.Tags.proxy
                 },
+            )
+            .put(
+                "default_domain_resolver",
+                JSONObject()
+                    .put("server", CoreContract.Android.localDnsTag)
+                    .put("strategy", CoreContract.Dns.strategy),
             )
             .put("auto_detect_interface", true)
     }
@@ -411,9 +420,6 @@ object SingBoxConfigBuilder {
         .put("enabled", true)
         .put("server_name", sni.ifBlank { server })
         .put("insecure", allowInsecure)
-        .apply {
-            if (alpn.isNotEmpty()) put("alpn", alpn.toJsonArray())
-        }
 
     private fun splitValues(value: String): JSONArray = value
         .split(',', ';')

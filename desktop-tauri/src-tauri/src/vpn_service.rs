@@ -360,6 +360,10 @@ fn handle_request(
             append_service_log(&format!("selector switched to {outbound}"));
             Ok(Value::Null)
         }
+        VpnRequest::CancelStart => {
+            engine.cancel_start();
+            Ok(Value::Null)
+        }
         VpnRequest::Stop => {
             engine.stop()?;
             Ok(Value::Null)

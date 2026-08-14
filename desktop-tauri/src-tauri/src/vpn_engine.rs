@@ -5,7 +5,10 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -51,6 +54,7 @@ const STARTUP_OUTBOUND_PROBE_RETRY_DELAY: Duration = Duration::from_millis(400);
 const CONNECTIVITY_EVENT_STARTUP_GRACE_MS: u64 = 20_000;
 #[cfg(windows)]
 const TUN_DNS_SERVER: &str = "1.1.1.1";
+const START_CANCELLED: &str = "VPN start cancelled";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EngineState {
@@ -98,6 +102,7 @@ pub(crate) struct VpnEngine {
     #[cfg(windows)]
     kill_switch: Mutex<VpnKillSwitch>,
     recovery: Mutex<RecoveryState>,
+    start_cancelled: AtomicBool,
 }
 
 impl VpnEngine {
@@ -115,6 +120,7 @@ impl VpnEngine {
             #[cfg(windows)]
             kill_switch: Mutex::new(VpnKillSwitch::new()),
             recovery: Mutex::new(RecoveryState::default()),
+            start_cancelled: AtomicBool::new(false),
         }
     }
 
@@ -182,6 +188,13 @@ impl VpnEngine {
         }
     }
 
+    pub(crate) fn cancel_start(&self) {
+        self.start_cancelled.store(true, Ordering::Release);
+        self.set_desired_config(None);
+        self.set_desired_kill_switch(false);
+        self.set_state(EngineState::Stopping);
+    }
+
     pub(crate) fn start(
         &self,
         paths: &EnginePaths,
@@ -192,6 +205,10 @@ impl VpnEngine {
             .lifecycle
             .lock()
             .map_err(|_| "Управление VPN недоступно".to_string())?;
+        if self.start_cancelled.swap(false, Ordering::AcqRel) {
+            self.set_state(EngineState::Stopped);
+            return Err(START_CANCELLED.to_string());
+        }
         #[cfg(windows)]
         if competing_vpn_active()? {
             return Err(COMPETING_VPN_ERROR.to_string());
@@ -220,13 +237,20 @@ impl VpnEngine {
         );
         if let Err(error) = result {
             let cleanup_error = self.stop_core().err();
+            if error == START_CANCELLED {
+                self.start_cancelled.store(false, Ordering::Release);
+            }
             if !preserve_kill_switch {
                 self.set_desired_config(None);
                 self.set_desired_kill_switch(false);
                 self.clear_selector_control();
                 self.disarm_kill_switch();
             }
-            self.set_state(EngineState::Error);
+            self.set_state(if error == START_CANCELLED {
+                EngineState::Stopped
+            } else {
+                EngineState::Error
+            });
             self.clear_started_at();
             return Err(match cleanup_error {
                 Some(cleanup) => format!("{error}; cleanup failed: {cleanup}"),
@@ -425,6 +449,7 @@ impl VpnEngine {
         preserve_kill_switch: bool,
     ) -> Result<(), String> {
         self.stop_core()?;
+        self.ensure_start_not_cancelled()?;
 
         let mut runtime_config = serde_json::from_str::<serde_json::Value>(config)
             .map_err(|error| format!("Некорректная конфигурация: {error}"))?;
@@ -459,6 +484,7 @@ impl VpnEngine {
                 .to_string();
             return Err(format!("Ошибка конфигурации VPN: {details}"));
         }
+        self.ensure_start_not_cancelled()?;
 
         let log_path = paths.app_dir.join("sing-box.log");
         rotate_log(&log_path)?;
@@ -485,7 +511,7 @@ impl VpnEngine {
             }
         };
 
-        std::thread::sleep(std::time::Duration::from_millis(350));
+        self.cancellable_start_delay(Duration::from_millis(350))?;
         let initial_status = match child.try_wait() {
             Ok(status) => status,
             Err(error) => {
@@ -502,6 +528,7 @@ impl VpnEngine {
                 details
             });
         }
+        self.ensure_start_not_cancelled()?;
 
         #[cfg(windows)]
         if let Err(error) = configure_tun_dns() {
@@ -510,6 +537,7 @@ impl VpnEngine {
             cleanup_stale_tun_default_route();
             return Err(error);
         }
+        self.ensure_start_not_cancelled()?;
 
         self.set_state(validation_state);
         let probe_result = self.verify_started_outbound(quick_probe);
@@ -520,6 +548,7 @@ impl VpnEngine {
             cleanup_stale_tun_default_route();
             return Err(error);
         }
+        self.ensure_start_not_cancelled()?;
 
         if kill_switch {
             if let Err(error) = self.arm_kill_switch(&paths.core, config, preserve_kill_switch) {
@@ -551,6 +580,23 @@ impl VpnEngine {
         Ok(())
     }
 
+    fn ensure_start_not_cancelled(&self) -> Result<(), String> {
+        if self.start_cancelled.load(Ordering::Acquire) {
+            Err(START_CANCELLED.to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn cancellable_start_delay(&self, duration: Duration) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + duration;
+        while std::time::Instant::now() < deadline {
+            self.ensure_start_not_cancelled()?;
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        self.ensure_start_not_cancelled()
+    }
+
     #[cfg(windows)]
     fn verify_started_outbound(&self, quick_probe: bool) -> Result<(), String> {
         let control = self
@@ -566,6 +612,14 @@ impl VpnEngine {
             };
         };
 
+        // The end-to-end request is the readiness authority. In particular,
+        // sing-box's selector delay endpoint can return 504 for a working
+        // Naive outbound, which must not add several probe timeouts here.
+        self.ensure_start_not_cancelled()?;
+        if verify_tunnel_once().is_ok() {
+            return Ok(());
+        }
+
         let outbound = control.selected().to_string();
         let attempts = if quick_probe {
             2
@@ -574,6 +628,7 @@ impl VpnEngine {
         };
         let mut last_error = "Сервер VPN не передал контрольные данные".to_string();
         for attempt in 0..attempts {
+            self.ensure_start_not_cancelled()?;
             match control.probe_outbound(&outbound) {
                 Ok(_) => {
                     // Prime the Windows DNS/TUN path, but do not tear down a verified
@@ -584,12 +639,13 @@ impl VpnEngine {
                 Err(error) => last_error = error,
             }
             if attempt + 1 < attempts {
-                std::thread::sleep(STARTUP_OUTBOUND_PROBE_RETRY_DELAY);
+                self.cancellable_start_delay(STARTUP_OUTBOUND_PROBE_RETRY_DELAY)?;
             }
         }
         // The Clash delay endpoint can transiently return 503 even when the
         // selected tunnel is already carrying traffic. Trust a successful
         // end-to-end request before deciding to tear the tunnel down.
+        self.ensure_start_not_cancelled()?;
         if verify_tunnel().is_ok() {
             return Ok(());
         }

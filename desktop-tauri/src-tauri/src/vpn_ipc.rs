@@ -62,6 +62,7 @@ pub(crate) enum VpnRequest {
     ForgetOutbound { outbound: String },
     Start { config: String, kill_switch: bool },
     SwitchOutbound { outbound: String },
+    CancelStart,
     Stop,
 }
 
@@ -145,8 +146,8 @@ pub(crate) fn run_server<F, E>(
     on_client_error: E,
 ) -> Result<(), String>
 where
-    F: Fn(VpnRequest) -> Result<Value, String>,
-    E: Fn(&str),
+    F: Fn(VpnRequest) -> Result<Value, String> + Sync,
+    E: Fn(&str) + Sync,
 {
     run_server_named(PIPE_NAME, running, handler, on_client_error)
 }
@@ -158,70 +159,76 @@ fn run_server_named<F, E>(
     on_client_error: E,
 ) -> Result<(), String>
 where
-    F: Fn(VpnRequest) -> Result<Value, String>,
-    E: Fn(&str),
+    F: Fn(VpnRequest) -> Result<Value, String> + Sync,
+    E: Fn(&str) + Sync,
 {
     let security = PipeSecurity::new()?;
     let pipe_name = wide(pipe_name);
 
-    while running.load(Ordering::Acquire) {
-        let attributes = security.attributes();
-        let handle = unsafe {
-            CreateNamedPipeW(
-                pipe_name.as_ptr(),
-                PIPE_ACCESS_DUPLEX,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                1,
-                PIPE_BUFFER_BYTES,
-                PIPE_BUFFER_BYTES,
-                0,
-                &attributes,
-            )
-        };
-        let pipe = OwnedHandle::new(handle)?;
-
-        if !wait_for_client(pipe.raw(), running)? {
-            continue;
-        }
-        if !running.load(Ordering::Acquire) {
-            unsafe {
-                let _ = DisconnectNamedPipe(pipe.raw());
-            }
-            break;
-        }
-
-        let client_result = (|| {
-            verify_peer_process_image(pipe.raw(), true)?;
-            let request_bytes = read_frame(pipe.raw(), IO_TIMEOUT)?;
-            let response = match serde_json::from_slice::<VpnRequest>(&request_bytes) {
-                Ok(request) => match handler(request) {
-                    Ok(value) => VpnResponse::Ok(value),
-                    Err(error) => VpnResponse::Error(error),
-                },
-                Err(error) => VpnResponse::Error(format!("Некорректный запрос: {error}")),
+    thread::scope(|scope| -> Result<(), String> {
+        while running.load(Ordering::Acquire) {
+            let attributes = security.attributes();
+            let handle = unsafe {
+                CreateNamedPipeW(
+                    pipe_name.as_ptr(),
+                    PIPE_ACCESS_DUPLEX,
+                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                    4,
+                    PIPE_BUFFER_BYTES,
+                    PIPE_BUFFER_BYTES,
+                    0,
+                    &attributes,
+                )
             };
-            let response_bytes =
-                serde_json::to_vec(&response).map_err(|error| error.to_string())?;
-            write_frame(pipe.raw(), &response_bytes, IO_TIMEOUT)?;
-            let mut acknowledgement = [0_u8; 1];
-            read_exact(pipe.raw(), &mut acknowledgement, IO_TIMEOUT)?;
-            if acknowledgement[0] != RESPONSE_ACK {
-                return Err("Некорректное подтверждение IPC-ответа".to_string());
-            }
-            Ok(())
-        })();
-        #[cfg(test)]
-        if let Err(error) = &client_result {
-            eprintln!("IPC server rejected request: {error}");
-        }
-        if let Err(error) = &client_result {
-            on_client_error(error);
-        }
+            let pipe = OwnedHandle::new(handle)?;
 
-        unsafe {
-            let _ = DisconnectNamedPipe(pipe.raw());
+            if !wait_for_client(pipe.raw(), running)? {
+                continue;
+            }
+            if !running.load(Ordering::Acquire) {
+                unsafe {
+                    let _ = DisconnectNamedPipe(pipe.raw());
+                }
+                break;
+            }
+
+            let handler = &handler;
+            let on_client_error = &on_client_error;
+            scope.spawn(move || {
+                let client_result = (|| {
+                    verify_peer_process_image(pipe.raw(), true)?;
+                    let request_bytes = read_frame(pipe.raw(), IO_TIMEOUT)?;
+                    let response = match serde_json::from_slice::<VpnRequest>(&request_bytes) {
+                        Ok(request) => match handler(request) {
+                            Ok(value) => VpnResponse::Ok(value),
+                            Err(error) => VpnResponse::Error(error),
+                        },
+                        Err(error) => VpnResponse::Error(format!("Некорректный запрос: {error}")),
+                    };
+                    let response_bytes =
+                        serde_json::to_vec(&response).map_err(|error| error.to_string())?;
+                    write_frame(pipe.raw(), &response_bytes, IO_TIMEOUT)?;
+                    let mut acknowledgement = [0_u8; 1];
+                    read_exact(pipe.raw(), &mut acknowledgement, IO_TIMEOUT)?;
+                    if acknowledgement[0] != RESPONSE_ACK {
+                        return Err("Некорректное подтверждение IPC-ответа".to_string());
+                    }
+                    Ok(())
+                })();
+                #[cfg(test)]
+                if let Err(error) = &client_result {
+                    eprintln!("IPC server rejected request: {error}");
+                }
+                if let Err(error) = &client_result {
+                    on_client_error(error);
+                }
+                unsafe {
+                    let _ = DisconnectNamedPipe(pipe.raw());
+                }
+            });
         }
-    }
+        Ok(())
+    })?;
 
     Ok(())
 }
@@ -431,6 +438,9 @@ fn wide(value: &str) -> Vec<u16> {
 }
 
 struct OwnedHandle(HANDLE);
+
+// Windows handles may be transferred between threads; this wrapper retains sole ownership.
+unsafe impl Send for OwnedHandle {}
 
 impl OwnedHandle {
     fn new(handle: HANDLE) -> Result<Self, String> {

@@ -37,9 +37,9 @@ Warpy импортирует VPN-профили, создаёт системны
 
 ## Возможности
 
-### Девять протоколов без ручного выбора
+### Десять протоколов без ручного выбора
 
-`VLESS` · `Hysteria2` · `Hysteria` · `Trojan` · `VMess` · `Shadowsocks` · `SOCKS` · `WireGuard` · `TUIC` · `Naive`
+`VLESS` · `Hysteria2` · `Hysteria` · `Trojan` · `VMess` · `Shadowsocks` · `SOCKS` · `WireGuard` · `TUIC` · `NaiveProxy`
 
 Warpy распознаёт протокол по содержимому ссылки. На Android профиль можно добавить из буфера обмена,
 QR-кода или изображения с QR-кодом; на Windows - из буфера обмена. Ссылки подписок распознаются той же
@@ -47,7 +47,7 @@ QR-кода или изображения с QR-кодом; на Windows - из 
 
 | | Android | Windows |
 | --- | --- | --- |
-| **Протоколы** | VLESS, Hysteria2, Hysteria, Trojan, VMess, Shadowsocks, SOCKS, WireGuard, TUIC, Naive | VLESS, Hysteria2, Hysteria, Trojan, VMess, Shadowsocks, SOCKS, WireGuard, TUIC, Naive |
+| **Протоколы** | VLESS, Hysteria2, Hysteria, Trojan, VMess, Shadowsocks, SOCKS, WireGuard, TUIC, NaiveProxy | VLESS, Hysteria2, Hysteria, Trojan, VMess, Shadowsocks, SOCKS, WireGuard, TUIC, NaiveProxy |
 | **Импорт** | Ссылка, буфер обмена, QR-код и подписка | Ссылка, буфер обмена и подписка |
 | **Туннелирование** | Отдельные правила для приложений и сайтов | Отдельные правила для приложений и сайтов |
 | **Надёжность** | Проверка трафика, восстановление после сна и смены сети | Проверка трафика и восстановление через системную службу |

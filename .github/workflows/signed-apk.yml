@@ -2,6 +2,9 @@ name: Warpy signed APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - codex/naive-runtime-build
 
 permissions:
   contents: read

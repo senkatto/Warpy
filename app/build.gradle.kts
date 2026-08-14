@@ -1,7 +1,4 @@
 import java.io.File
-import java.net.URI
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
 plugins {
@@ -23,9 +20,7 @@ val productionSigningConfigured = releaseStoreFile != null &&
     releaseKeyPassword != null &&
     file(releaseStoreFile).exists()
 
-val hiddifyCoreVersion = "4.1.0"
-val hiddifyCoreArchiveSha256 = "6C4841F7AAB23EB1FB17831349ECDFC3CA9C31553B8CBE5EFFD820CB12607F56"
-val hiddifyCoreAarSha256 = "8BC1CE38BCA2DD3E13022A4457336602490F2E7D063626A0192D89209A49D07E"
+val hiddifyCoreAarSha256 = "85033049DBED46BB5528A4A258BABA861FCDB51CD4724427A82DDF7922D9ED0C"
 val hiddifyCoreAar = layout.projectDirectory.file("libs/hiddify-core.aar").asFile
 
 fun File.sha256(): String {
@@ -41,50 +36,11 @@ fun File.sha256(): String {
     return digest.digest().joinToString("") { "%02X".format(it) }
 }
 
-val fetchHiddifyCore by tasks.registering {
-    val archive = layout.buildDirectory.file(
-        "downloads/hiddify-lib-android-v$hiddifyCoreVersion.tar.gz",
-    ).get().asFile
-    outputs.file(hiddifyCoreAar)
-    outputs.upToDateWhen {
-        hiddifyCoreAar.isFile && hiddifyCoreAar.sha256() == hiddifyCoreAarSha256
-    }
-
+val verifyHiddifyCore by tasks.registering {
+    inputs.file(hiddifyCoreAar)
     doLast {
-        archive.parentFile.mkdirs()
-        hiddifyCoreAar.parentFile.mkdirs()
-        if (!archive.isFile || archive.sha256() != hiddifyCoreArchiveSha256) {
-            val temporary = File(archive.parentFile, "${archive.name}.tmp")
-            temporary.delete()
-            val url =
-                "https://github.com/hiddify/hiddify-core/releases/download/" +
-                    "v$hiddifyCoreVersion/hiddify-lib-android.tar.gz"
-            val connection = URI(url).toURL().openConnection().apply {
-                connectTimeout = 30_000
-                readTimeout = 180_000
-            }
-            connection.getInputStream().use { input ->
-                temporary.outputStream().buffered().use(input::copyTo)
-            }
-            check(temporary.sha256() == hiddifyCoreArchiveSha256) {
-                "Hiddify Android archive checksum mismatch."
-            }
-            Files.move(
-                temporary.toPath(),
-                archive.toPath(),
-                StandardCopyOption.REPLACE_EXISTING,
-            )
-        }
-
-        hiddifyCoreAar.delete()
-        copy {
-            from(tarTree(resources.gzip(archive))) {
-                include("hiddify-core.aar")
-            }
-            into(hiddifyCoreAar.parentFile)
-        }
         check(hiddifyCoreAar.isFile && hiddifyCoreAar.sha256() == hiddifyCoreAarSha256) {
-            "Hiddify Android AAR checksum mismatch."
+            "Pinned Hiddify Android AAR is missing or its checksum does not match."
         }
     }
 }
@@ -156,7 +112,7 @@ val checkMojibakeText by tasks.registering {
 
 tasks.named("preBuild") {
     dependsOn(checkMojibakeText)
-    dependsOn(fetchHiddifyCore)
+    dependsOn(verifyHiddifyCore)
 }
 
 android {
@@ -168,8 +124,8 @@ android {
         applicationId = "com.warpy.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 22
-        versionName = "1.0.4"
+        versionCode = 23
+        versionName = "1.0.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += "arm64-v8a"

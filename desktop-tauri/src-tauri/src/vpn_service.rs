@@ -436,6 +436,10 @@ fn service_engine_paths() -> Result<EnginePaths, String> {
             binary_dir.join("bin").join("wintun.dll"),
             binary_dir.join("wintun.dll"),
         ],
+        cronet_sources: vec![
+            binary_dir.join("bin").join("libcronet.dll"),
+            binary_dir.join("libcronet.dll"),
+        ],
     })
 }
 

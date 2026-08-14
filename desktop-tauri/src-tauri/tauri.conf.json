@@ -43,6 +43,7 @@
     ],
     "resources": [
       "bin/wintun.dll",
+      "bin/libcronet.dll",
       "flags/*.png"
     ],
     "windows": {

@@ -1,11 +1,17 @@
 # Android VPN core
 
 - File: `hiddify-core.aar`
-- Distribution: Hiddify Core Android
+- Distribution: locally reproducible Hiddify Core Android build
 - Release: `v4.1.0`
-- Source: `https://github.com/hiddify/hiddify-core/releases/tag/v4.1.0`
-- Archive SHA-256: `6C4841F7AAB23EB1FB17831349ECDFC3CA9C31553B8CBE5EFFD820CB12607F56`
-- AAR SHA-256: `8BC1CE38BCA2DD3E13022A4457336602490F2E7D063626A0192D89209A49D07E`
+- Source: `https://github.com/hiddify/hiddify-core/tree/c9d6f0f00b2eda34e4fb71863e4e0a62b3e931a0`
+- Hiddify sing-box revision: `0a02b7729f6a211436bb8bdcd8696c283eb27767`
+- Go: `1.25.6`
+- gomobile/gobind: `v0.1.11`
+- Android NDK: `28.2.13676358`
+- Target: `android/arm64`, API 23
+- AAR SHA-256: `85033049DBED46BB5528A4A258BABA861FCDB51CD4724427A82DDF7922D9ED0C`
 
-Gradle downloads the pinned release only when the AAR is absent and rejects
-both the release archive and extracted AAR if either checksum changes.
+The build uses the upstream `with_naive_outbound` feature tag. API 23 is
+required by the Naive-enabled Android variant; the upstream API 21 compatibility
+variant intentionally excludes Naive. Gradle verifies the checked-in AAR before
+every application build and rejects a checksum mismatch.

@@ -82,6 +82,7 @@ pub(crate) struct EnginePaths {
     pub(crate) app_dir: PathBuf,
     pub(crate) core: PathBuf,
     pub(crate) wintun_sources: Vec<PathBuf>,
+    pub(crate) cronet_sources: Vec<PathBuf>,
 }
 
 pub(crate) struct VpnEngine {
@@ -153,6 +154,7 @@ impl VpnEngine {
             .map_err(|_| "Управление VPN недоступно".to_string())?;
         self.verify_core(&paths.core)?;
         ensure_wintun(paths)?;
+        ensure_cronet(paths)?;
         Ok(())
     }
 
@@ -443,6 +445,7 @@ impl VpnEngine {
 
         self.verify_core(&paths.core)?;
         ensure_wintun(paths)?;
+        ensure_cronet(paths)?;
 
         let check_output = singbox_command(&paths.core)
             .arg("check")
@@ -952,6 +955,26 @@ fn ensure_wintun(paths: &EnginePaths) -> Result<(), String> {
     }
 
     Err("Библиотека Wintun не найдена".to_string())
+}
+
+fn ensure_cronet(paths: &EnginePaths) -> Result<(), String> {
+    let binary_dir = paths
+        .core
+        .parent()
+        .ok_or_else(|| "Некорректный путь VPN-ядра".to_string())?;
+    let destination = binary_dir.join("libcronet.dll");
+    if destination.is_file() {
+        return Ok(());
+    }
+
+    for source in &paths.cronet_sources {
+        if source.is_file() {
+            fs::copy(source, &destination).map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+    }
+
+    Err("Библиотека Cronet для NaiveProxy не найдена".to_string())
 }
 
 fn singbox_command(binary_path: &Path) -> Command {

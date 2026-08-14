@@ -20,7 +20,7 @@ val productionSigningConfigured = releaseStoreFile != null &&
     releaseKeyPassword != null &&
     file(releaseStoreFile).exists()
 
-val hiddifyCoreAarSha256 = "85033049DBED46BB5528A4A258BABA861FCDB51CD4724427A82DDF7922D9ED0C"
+val hiddifyCoreAarSha256 = "BBEC0241E364E679BE1EB33801FE118386137C27D4AF74DAA45F6898B16A7AF3"
 val hiddifyCoreAar = layout.projectDirectory.file("libs/hiddify-core.aar").asFile
 
 fun File.sha256(): String {

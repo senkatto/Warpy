@@ -222,12 +222,17 @@ export function parseProfileLink(rawLink) {
   if (/^ss:\/\//i.test(source)) return parseShadowsocksLink(source);
 
   try {
+    const naiveQuic = /^naive\+quic:\/\//i.test(source);
     const link = source
       .replace(/^hy2:\/\//i, 'hysteria2://')
       .replace(/^socks5:\/\//i, 'socks://')
-      .replace(/^wg:\/\//i, 'wireguard://');
+      .replace(/^wg:\/\//i, 'wireguard://')
+      .replace(/^naive\+(?:https|quic):\/\//i, 'naive://');
     const url = new URL(link);
-    const protocol = url.protocol.slice(0, -1).toLowerCase();
+    const parsedProtocol = url.protocol.slice(0, -1).toLowerCase();
+    const protocol = parsedProtocol === 'https' && url.username && url.password
+      ? 'naive'
+      : parsedProtocol;
     const port = parsePort(url, protocol === 'socks' ? 1080 : (protocol === 'wireguard' ? 51820 : 443));
     const credential = decode(url.username);
     const password = decode(url.password);
@@ -236,7 +241,8 @@ export function parseProfileLink(rawLink) {
       ? url.hostname.slice(1, -1)
       : url.hostname;
     if (!SUPPORTED_PROTOCOLS.has(protocol) || !host || !port) return null;
-    if (['vless', 'trojan', 'hysteria2', 'tuic'].includes(protocol) && !credential) return null;
+    if (['vless', 'trojan', 'hysteria2', 'tuic', 'naive'].includes(protocol) && !credential) return null;
+    if (protocol === 'naive' && !password) return null;
 
     const obfsPassword = url.searchParams.get('obfs-password')
       || url.searchParams.get('obfs_password')
@@ -249,7 +255,7 @@ export function parseProfileLink(rawLink) {
       host,
       port,
       uuid: ['trojan', 'hysteria2', 'hysteria'].includes(protocol) ? opaqueCredential : credential,
-      security: (url.searchParams.get('security') || '').toLowerCase(),
+      security: protocol === 'naive' ? 'tls' : (url.searchParams.get('security') || '').toLowerCase(),
       sni: url.searchParams.get('sni') || url.searchParams.get('peer') || '',
       pbk: url.searchParams.get('pbk') || '',
       sid: url.searchParams.get('sid') || '',
@@ -283,8 +289,8 @@ export function parseProfileLink(rawLink) {
       hopIntervalMax: url.searchParams.get('hop_interval_max') || url.searchParams.get('hop-interval-max') || '',
       upMbps: Number.parseInt(url.searchParams.get('up_mbps') || url.searchParams.get('upmbps'), 10) || 0,
       downMbps: Number.parseInt(url.searchParams.get('down_mbps') || url.searchParams.get('downmbps'), 10) || 0,
-      username: protocol === 'socks' ? credential : '',
-      password: protocol === 'tuic' || protocol === 'socks' ? password : '',
+      username: protocol === 'socks' || protocol === 'naive' ? credential : '',
+      password: ['tuic', 'socks', 'naive'].includes(protocol) ? password : '',
       encryption: '',
       alterId: 0,
       privateKey: url.searchParams.get('pk') || url.searchParams.get('private_key') || '',
@@ -295,7 +301,10 @@ export function parseProfileLink(rawLink) {
       mtu: Number.parseInt(url.searchParams.get('mtu'), 10) || 0,
       congestionControl: url.searchParams.get('congestion_control') || url.searchParams.get('congestion-control') || 'cubic',
       udpRelayMode: url.searchParams.get('udp_relay_mode') || url.searchParams.get('udp-relay-mode') || 'native',
-      raw: link,
+      naiveQuic: protocol === 'naive' && (
+        naiveQuic || ['1', 'true'].includes(url.searchParams.get('quic') || '')
+      ),
+      raw: source,
     };
 
     if (protocol === 'hysteria') {
@@ -305,7 +314,7 @@ export function parseProfileLink(rawLink) {
       profile.downMbps = Number.parseInt(url.searchParams.get('downmbps') || url.searchParams.get('down_mbps'), 10) || 0;
     }
     if (protocol === 'wireguard' && (!profile.privateKey || !profile.peerPublicKey || !profile.localAddress)) return null;
-    if (!['hysteria2', 'hysteria', 'tuic', 'wireguard', 'socks'].includes(protocol) && !SUPPORTED_TRANSPORTS.has(transport)) return null;
+    if (!['hysteria2', 'hysteria', 'tuic', 'wireguard', 'socks', 'naive'].includes(protocol) && !SUPPORTED_TRANSPORTS.has(transport)) return null;
     return profile;
   } catch {
     return null;
@@ -371,6 +380,16 @@ export function profileShareLink(inputProfile) {
       ? `${encodeURIComponent(profile.username || '')}:${encodeURIComponent(profile.password || '')}@`
       : '';
     return `socks5://${credentials}${endpoint}${fragment}`;
+  }
+
+  if (profile.protocol === 'naive') {
+    const credentials = `${encodeURIComponent(profile.username)}:${encodeURIComponent(profile.password)}`;
+    const scheme = profile.naiveQuic ? 'naive+quic' : 'naive+https';
+    return `${scheme}://${credentials}@${endpoint}${encodeQuery([
+      ['sni', profile.sni],
+      ['alpn', alpn],
+      ['insecure', insecure],
+    ])}${fragment}`;
   }
 
   if (profile.protocol === 'wireguard') {
@@ -558,6 +577,18 @@ function buildProxyOutbound(profile, tag = TAGS.proxy) {
     outbound.version = '5';
     if (profile.username) outbound.username = profile.username;
     if (profile.password) outbound.password = profile.password;
+  } else if (profile.protocol === 'naive') {
+    outbound.tcp_keep_alive = PROXY_DIAL.tcpKeepAlive;
+    outbound.tcp_keep_alive_interval = PROXY_DIAL.tcpKeepAliveInterval;
+    outbound.username = profile.username;
+    outbound.password = profile.password;
+    outbound.quic = Boolean(profile.naiveQuic);
+    outbound.tls = {
+      enabled: true,
+      server_name: profile.sni || profile.host,
+      insecure: Boolean(profile.insecure),
+      ...(profile.alpn?.length ? { alpn: profile.alpn } : {}),
+    };
   } else if (profile.protocol === 'tuic') {
     outbound.uuid = profile.uuid;
     outbound.password = profile.password || '';
@@ -614,6 +645,7 @@ function normalizeProfile(inputProfile) {
     wireguard: Boolean(profile.privateKey && profile.peerPublicKey && profile.localAddress),
     tuic: Boolean(profile.uuid),
     hysteria: true,
+    naive: Boolean(profile.username && profile.password),
   }[profile.protocol];
   if (!profile.host || !profile.port || !hasCredentials || !SUPPORTED_PROTOCOLS.has(profile.protocol)) {
     throw new Error('Incomplete VPN profile');

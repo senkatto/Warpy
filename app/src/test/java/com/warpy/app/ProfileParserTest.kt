@@ -21,11 +21,31 @@ class ProfileParserTest {
             "wg://wg.example.com:51820?pk=private&peer_pk=public&local_address=10.0.0.2%2F32#WG" to Protocol.WireGuard,
             "tuic://00000000-0000-4000-8000-000000000123:secret@tuic.example.com:443?sni=tuic.example.com#TUIC" to Protocol.Tuic,
             "hysteria://hy.example.com:443?auth=secret&peer=hy.example.com&upmbps=50&downmbps=100#Hysteria" to Protocol.Hysteria,
+            "naive+https://alice:s%40cret@naive.example.com:443?sni=front.example.com&alpn=h2%2Chttp%2F1.1#Naive" to Protocol.Naive,
         )
 
         fixtures.forEach { (link, protocol) ->
             assertEquals(protocol, ProfileParser.parse(link).getOrThrow().protocol)
         }
+    }
+
+    @Test
+    fun testParsesCredentialedNaiveHttpsAndQuicLinks() {
+        val https = ProfileParser.parse(
+            "https://alice:s%40cret@naive.example.com:443?sni=front.example.com&alpn=h2%2Chttp%2F1.1#Naive",
+        ).getOrThrow()
+
+        assertEquals(Protocol.Naive, https.protocol)
+        assertEquals("alice", https.username)
+        assertEquals("s@cret", https.password)
+        assertEquals("front.example.com", https.sni)
+        assertEquals(listOf("h2", "http/1.1"), https.alpn)
+        assertFalse(https.naiveQuic)
+
+        val quic = ProfileParser.parse(
+            "naive+quic://alice:secret@naive.example.com#Naive%20QUIC",
+        ).getOrThrow()
+        assertTrue(quic.naiveQuic)
     }
 
     @Test

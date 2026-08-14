@@ -34,6 +34,18 @@ test('parses a URI subscription and reports unsupported entries', () => {
   assert.deepEqual(result.profiles.map(profile => profile.protocol), ['vless', 'trojan', 'hysteria2']);
 });
 
+test('parses Naive links in URI subscriptions without treating ordinary HTTPS URLs as profiles', () => {
+  const result = parseSubscriptionPayload([
+    'https://alice:secret@naive.example.com:443#Naive',
+    'https://example.com/not-a-profile',
+  ].join('\n'));
+
+  assert.equal(result.profiles.length, 1);
+  assert.equal(result.profiles[0].protocol, 'naive');
+  assert.equal(result.profiles[0].username, 'alice');
+  assert.equal(result.skipped, 1);
+});
+
 test('parses unpadded URL-safe Base64 subscriptions', () => {
   const encoded = Buffer.from(links.join('\n'), 'utf8')
     .toString('base64')

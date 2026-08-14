@@ -10,6 +10,7 @@ enum class Protocol(val isUdpBased: Boolean = false) {
     WireGuard(isUdpBased = true),
     Tuic(isUdpBased = true),
     Hysteria(isUdpBased = true),
+    Naive,
 }
 
 enum class AppTunnelMode {
@@ -66,6 +67,7 @@ data class VpnProfile(
     val mtu: Int = 0,
     val congestionControl: String = "",
     val udpRelayMode: String = "",
+    val naiveQuic: Boolean = false,
     val raw: String = "",
 )
 

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "protocols": ["vless", "trojan", "hysteria2", "vmess", "shadowsocks", "socks", "wireguard", "tuic", "hysteria"],
+  "protocols": ["vless", "trojan", "hysteria2", "vmess", "shadowsocks", "socks", "wireguard", "tuic", "hysteria", "naive"],
   "transports": ["tcp", "raw", "ws", "grpc", "http", "httpupgrade", "xhttp"],
   "tags": {
     "proxy": "proxy",

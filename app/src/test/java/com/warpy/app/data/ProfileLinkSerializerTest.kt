@@ -112,6 +112,17 @@ class ProfileLinkSerializerTest {
                 hysteria2UpMbps = 25,
                 hysteria2DownMbps = 75,
             ),
+            VpnProfile(
+                name = "Naive QUIC",
+                protocol = Protocol.Naive,
+                server = "naive.example.com",
+                port = 443,
+                username = "alice",
+                password = "s@cret",
+                sni = "front.example.com",
+                alpn = listOf("h2", "http/1.1"),
+                naiveQuic = true,
+            ),
         )
 
         profiles.forEach { original ->

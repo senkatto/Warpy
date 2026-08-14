@@ -92,6 +92,21 @@ class SubscriptionParserTest {
     }
 
     @Test
+    fun parsesNaiveLinksWithoutTreatingOrdinaryHttpsUrlsAsProfiles() {
+        val payload = """
+            https://alice:secret@naive.example.com:443#Naive
+            https://example.com/not-a-profile
+        """.trimIndent()
+
+        val parsed = SubscriptionParser.parse(payload).getOrThrow()
+
+        assertEquals(1, parsed.profiles.size)
+        assertEquals(Protocol.Naive, parsed.profiles.single().protocol)
+        assertEquals("alice", parsed.profiles.single().username)
+        assertEquals(1, parsed.skipped)
+    }
+
+    @Test
     fun skipsMalformedLinksWithoutDiscardingValidProfiles() {
         val payload = """
             vless://missing-host

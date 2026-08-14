@@ -1,6 +1,7 @@
 const PROFILE_SCHEMES = new Set([
   'vless:', 'trojan:', 'hysteria2:', 'hy2:', 'vmess:', 'ss:',
   'socks:', 'socks5:', 'wg:', 'wireguard:', 'tuic:', 'hysteria:',
+  'naive:', 'naive+https:', 'naive+quic:',
 ]);
 
 export function classifyClipboardImport(value) {
@@ -10,6 +11,9 @@ export function classifyClipboardImport(value) {
   try {
     const url = new URL(text);
     if (PROFILE_SCHEMES.has(url.protocol.toLowerCase())) {
+      return { type: 'profile', value: text };
+    }
+    if (url.protocol === 'https:' && url.username && url.password) {
       return { type: 'profile', value: text };
     }
     if (url.protocol === 'https:' && !url.username && !url.password) {

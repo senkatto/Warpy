@@ -7,6 +7,7 @@ import org.json.JSONObject
 import org.json.JSONTokener
 import org.snakeyaml.engine.v2.api.Load
 import org.snakeyaml.engine.v2.api.LoadSettings
+import java.net.URI
 import java.util.Base64
 
 data class ParsedSubscription(
@@ -20,10 +21,10 @@ object SubscriptionParser {
     private const val MAX_DECODE_DEPTH = 2
 
     private val supportedSchemes = Regex(
-        "(?i)^(vless|hysteria2|hy2|trojan|vmess|ss|socks5?|wg|wireguard|tuic|hysteria)://",
+        "(?i)^(vless|hysteria2|hy2|trojan|vmess|ss|socks5?|wg|wireguard|tuic|hysteria|naive(?:\\+https|\\+quic)?)://",
     )
     private val supportedProtocols = setOf(
-        "vless", "hysteria2", "trojan", "vmess", "shadowsocks", "socks", "wireguard", "tuic", "hysteria",
+        "vless", "hysteria2", "trojan", "vmess", "shadowsocks", "socks", "wireguard", "tuic", "hysteria", "naive",
     )
     private val supportedShadowsocksPlugins = setOf("obfs-local", "v2ray-plugin")
 
@@ -117,12 +118,12 @@ object SubscriptionParser {
             .map(String::trim)
             .filter(String::isNotBlank)
             .toList()
-        if (candidates.none { supportedSchemes.containsMatchIn(it) }) return null
+        if (candidates.none(::isProfileLink)) return null
 
         val profiles = mutableListOf<VpnProfile>()
         var skipped = 0
         for (candidate in candidates) {
-            if (!supportedSchemes.containsMatchIn(candidate)) {
+            if (!isProfileLink(candidate)) {
                 skipped += 1
                 continue
             }
@@ -136,6 +137,16 @@ object SubscriptionParser {
         }
         return profiles.takeIf(List<VpnProfile>::isNotEmpty)
             ?.let { ParsedSubscription(it, skipped) }
+    }
+
+    private fun isProfileLink(value: String): Boolean {
+        if (supportedSchemes.containsMatchIn(value)) return true
+        return runCatching {
+            val uri = URI(value)
+            uri.scheme.equals("https", ignoreCase = true) &&
+                !uri.rawUserInfo.isNullOrBlank() &&
+                uri.rawUserInfo.orEmpty().contains(':')
+        }.getOrDefault(false)
     }
 
     private fun singBoxProfile(source: Map<*, *>): VpnProfile? {
@@ -250,6 +261,11 @@ object SubscriptionParser {
                 hysteria2UpMbps = source.int("up_mbps", "up-mbps") ?: 0,
                 hysteria2DownMbps = source.int("down_mbps", "down-mbps") ?: 0,
             )
+            Protocol.Naive -> base.copy(
+                username = source.string("username").takeIf(String::isNotBlank) ?: return null,
+                password = source.secret("password").takeIf(String::isNotBlank) ?: return null,
+                naiveQuic = source.boolean("quic") == true,
+            )
         }
     }
 
@@ -282,7 +298,7 @@ object SubscriptionParser {
             port = port,
             security = when {
                 publicKey.isNotBlank() -> "reality"
-                source.boolean("tls") == true || protocol in setOf(Protocol.Trojan, Protocol.Hysteria2, Protocol.Tuic, Protocol.Hysteria) -> "tls"
+                source.boolean("tls") == true || protocol in setOf(Protocol.Trojan, Protocol.Hysteria2, Protocol.Tuic, Protocol.Hysteria, Protocol.Naive) -> "tls"
                 else -> ""
             },
             sni = source.string("servername", "server-name", "sni", "peer"),
@@ -364,6 +380,11 @@ object SubscriptionParser {
                 hysteria2UpMbps = source.int("up", "up-mbps", "up_mbps") ?: 0,
                 hysteria2DownMbps = source.int("down", "down-mbps", "down_mbps") ?: 0,
             )
+            Protocol.Naive -> base.copy(
+                username = source.string("username").takeIf(String::isNotBlank) ?: return null,
+                password = source.secret("password").takeIf(String::isNotBlank) ?: return null,
+                naiveQuic = source.boolean("quic") == true,
+            )
         }
     }
 
@@ -399,6 +420,7 @@ object SubscriptionParser {
         "wireguard" -> Protocol.WireGuard
         "tuic" -> Protocol.Tuic
         "hysteria" -> Protocol.Hysteria
+        "naive" -> Protocol.Naive
         else -> null
     }
 

@@ -1673,6 +1673,7 @@ private fun Protocol.label(): String = when (this) {
     Protocol.WireGuard -> "WireGuard"
     Protocol.Tuic -> "TUIC"
     Protocol.Hysteria -> "Hysteria"
+    Protocol.Naive -> "Naive"
 }
 
 @Composable
@@ -3612,6 +3613,7 @@ private fun VpnProfile.safeTitle(): String {
         Protocol.WireGuard -> "WireGuard"
         Protocol.Tuic -> "TUIC"
         Protocol.Hysteria -> "Hysteria"
+        Protocol.Naive -> "Naive"
     }
     val location = if (name.isNotBlank()) name else if (sni.isNotBlank()) sni else server
     return "$protocolName • $location"

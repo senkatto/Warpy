@@ -354,6 +354,7 @@ private fun JSONObject.toProfile(): VpnProfile = VpnProfile(
         mtu = optInt("mtu"),
         congestionControl = optString("congestionControl"),
         udpRelayMode = optString("udpRelayMode"),
+        naiveQuic = optBoolean("naiveQuic"),
         raw = optString("raw"),
     )
 
@@ -400,6 +401,7 @@ private fun VpnProfile.toJson(): JSONObject = JSONObject()
         .put("mtu", mtu)
         .put("congestionControl", congestionControl)
         .put("udpRelayMode", udpRelayMode)
+        .put("naiveQuic", naiveQuic)
         .put("raw", raw)
 
 private fun JSONObject.optStringList(name: String): List<String> = when (val value = opt(name)) {

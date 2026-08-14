@@ -25,6 +25,10 @@ object ProfileParser {
                 parseWireGuard(value)
             value.startsWith("tuic://", ignoreCase = true) -> parseTuic(value)
             value.startsWith("hysteria://", ignoreCase = true) -> parseHysteria(value)
+            value.startsWith("naive://", ignoreCase = true) ||
+                value.startsWith("naive+https://", ignoreCase = true) ||
+                value.startsWith("naive+quic://", ignoreCase = true) ||
+                value.isCredentialedHttpsLink() -> parseNaive(value)
             else -> error("Unsupported VPN profile link")
         }
     }
@@ -43,7 +47,11 @@ object ProfileParser {
             value.startsWith("wg://", ignoreCase = true) ||
             value.startsWith("wireguard://", ignoreCase = true) ||
             value.startsWith("tuic://", ignoreCase = true) ||
-            value.startsWith("hysteria://", ignoreCase = true)
+            value.startsWith("hysteria://", ignoreCase = true) ||
+            value.startsWith("naive://", ignoreCase = true) ||
+            value.startsWith("naive+https://", ignoreCase = true) ||
+            value.startsWith("naive+quic://", ignoreCase = true) ||
+            value.isCredentialedHttpsLink()
         ) {
             return value.trimProfileTail()
         }
@@ -358,6 +366,37 @@ object ProfileParser {
         )
     }
 
+    private fun parseNaive(raw: String): VpnProfile {
+        val naiveQuic = raw.startsWith("naive+quic://", ignoreCase = true)
+        val normalized = raw
+            .replaceFirst("naive+https://", "naive://", ignoreCase = true)
+            .replaceFirst("naive+quic://", "naive://", ignoreCase = true)
+            .replaceFirst("https://", "naive://", ignoreCase = true)
+        val uri = URI(normalized)
+        val params = queryParams(uri.rawQuery.orEmpty())
+        val credentials = uri.rawUserInfo.orEmpty().split(':', limit = 2)
+        val server = uri.host.orEmpty()
+        val username = decode(credentials.getOrNull(0))
+        val password = decodeSecret(credentials.getOrNull(1))
+        require(server.isNotBlank()) { "Naive server is missing" }
+        require(username.isNotBlank()) { "Naive username is missing" }
+        require(password.isNotBlank()) { "Naive password is missing" }
+        return VpnProfile(
+            name = decode(uri.rawFragment).ifBlank { server },
+            protocol = Protocol.Naive,
+            server = server,
+            port = uri.port.takeIf { it > 0 } ?: 443,
+            username = username,
+            password = password,
+            security = "tls",
+            sni = firstQuery(params, "sni", "peer"),
+            alpn = parseAlpn(params["alpn"]),
+            allowInsecure = firstQuery(params, "allowInsecure", "allow_insecure", "insecure").isEnabledParameter(),
+            naiveQuic = naiveQuic || firstQuery(params, "quic").isEnabledParameter(),
+            raw = raw,
+        )
+    }
+
     private fun decodeBase64(value: String): String {
         val compact = value.trim().replace('-', '+').replace('_', '/')
         val padded = compact + "=".repeat((4 - compact.length % 4) % 4)
@@ -404,8 +443,13 @@ object ProfileParser {
     private fun String.trimProfileTail(): String =
         trim().trimEnd(',', ';', '.', ')', ']', '}', '"', '\'')
 
+    private fun String.isCredentialedHttpsLink(): Boolean {
+        if (!startsWith("https://", ignoreCase = true)) return false
+        return runCatching { URI(this).rawUserInfo.orEmpty().contains(':') }.getOrDefault(false)
+    }
+
     private val PROFILE_LINK_REGEX = Regex(
-        pattern = "(?i)(vless|hysteria2|hy2|trojan|vmess|ss|socks5?|wg|wireguard|tuic|hysteria)://[^\\s<>\"']+",
+        pattern = "(?i)(vless|hysteria2|hy2|trojan|vmess|ss|socks5?|wg|wireguard|tuic|hysteria|naive(?:\\+https|\\+quic)?)://[^\\s<>\"']+",
     )
 
     private val V2RAY_TRANSPORTS = setOf("tcp", "raw", "ws", "grpc", "http", "httpupgrade", "xhttp")

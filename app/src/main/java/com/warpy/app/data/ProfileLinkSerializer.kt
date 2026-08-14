@@ -23,6 +23,7 @@ object ProfileLinkSerializer {
             Protocol.WireGuard -> wireGuard(profile)
             Protocol.Tuic -> tuic(profile)
             Protocol.Hysteria -> hysteria(profile)
+            Protocol.Naive -> naive(profile)
         }
     }
 
@@ -168,6 +169,21 @@ object ProfileLinkSerializer {
             "downmbps" to profile.hysteria2DownMbps.positiveString(),
         ),
     )
+
+    private fun naive(profile: VpnProfile): String {
+        require(profile.username.isNotBlank()) { "Naive username is missing" }
+        require(profile.password.isNotBlank()) { "Naive password is missing" }
+        return uri(
+            scheme = if (profile.naiveQuic) "naive+quic" else "naive+https",
+            userInfo = "${encode(profile.username)}:${encode(profile.password)}",
+            profile = profile,
+            query = listOf(
+                "sni" to profile.sni,
+                "alpn" to profile.alpn.joinToString(","),
+                "insecure" to profile.allowInsecure.asQueryFlag(),
+            ),
+        )
+    }
 
     private fun commonV2RayQuery(profile: VpnProfile): List<Pair<String, String>> = listOf(
         "security" to profile.security,

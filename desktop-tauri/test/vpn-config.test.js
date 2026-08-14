@@ -28,6 +28,7 @@ test('serializes structured profiles for every advertised protocol', () => {
     'wg://wg.example.com:51820?pk=private&peer_pk=public&pre_shared_key=shared&local_address=10.0.0.2%2F32&mtu=1380#WG',
     'tuic://00000000-0000-4000-8000-000000000123:secret@tuic.example.com:443?sni=tuic.example.com&congestion_control=bbr#TUIC',
     'hysteria://hy.example.com:443?auth=secret&peer=hy.example.com&upmbps=50&downmbps=100#Hysteria',
+    'naive+https://alice:s%40cret@naive.example.com:443?sni=front.example.com&alpn=h2%2Chttp%2F1.1#Naive',
   ];
 
   for (const fixture of fixtures) {
@@ -76,6 +77,7 @@ test('auto-detects and builds common profile link protocols', () => {
     ['wg://wg.example.com:51820?pk=private&peer_pk=public&local_address=10.0.0.2%2F32#WG', 'wireguard'],
     ['tuic://00000000-0000-4000-8000-000000000123:secret@tuic.example.com:443?sni=tuic.example.com#TUIC', 'tuic'],
     ['hysteria://hy.example.com:443?auth=secret&peer=hy.example.com&upmbps=50&downmbps=100#Hysteria', 'hysteria'],
+    ['naive+https://alice:s%40cret@naive.example.com:443?sni=front.example.com&alpn=h2%2Chttp%2F1.1#Naive', 'naive'],
   ];
 
   for (const [link, protocol] of fixtures) {
@@ -85,6 +87,25 @@ test('auto-detects and builds common profile link protocols', () => {
     const generatedType = protocol === 'wireguard' ? config.endpoints?.[0]?.type : config.outbounds[0].type;
     assert.equal(generatedType, protocol);
   }
+});
+
+test('builds Naive HTTPS and QUIC outbounds without inventing TLS values', () => {
+  const httpsProfile = parseProfileLink(
+    'https://alice:s%40cret@naive.example.com:443?sni=front.example.com&alpn=h2%2Chttp%2F1.1#Naive',
+  );
+  const httpsOutbound = buildSingBoxConfig(httpsProfile).outbounds[0];
+
+  assert.equal(httpsProfile.protocol, 'naive');
+  assert.equal(httpsOutbound.type, 'naive');
+  assert.equal(httpsOutbound.username, 'alice');
+  assert.equal(httpsOutbound.password, 's@cret');
+  assert.equal(httpsOutbound.quic, false);
+  assert.equal(httpsOutbound.tls.server_name, 'front.example.com');
+  assert.deepEqual(httpsOutbound.tls.alpn, ['h2', 'http/1.1']);
+  assert.equal(httpsOutbound.tls.utls, undefined);
+
+  const quicProfile = parseProfileLink('naive+quic://alice:secret@naive.example.com#Naive QUIC');
+  assert.equal(buildSingBoxConfig(quicProfile).outbounds[0].quic, true);
 });
 
 test('preserves explicit VLESS SNI in the generated TLS config', () => {
@@ -518,6 +539,7 @@ test('bundled sing-box accepts generated configs without deprecated modes', { sk
     'wg://wg.example.com:51820?pk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%3D&peer_pk=BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB%3D&local_address=10.0.0.2%2F32#WG',
     'tuic://00000000-0000-4000-8000-000000000123:secret@tuic.example.com:443?sni=tuic.example.com#TUIC',
     'hysteria://hy.example.com:443?auth=secret&peer=hy.example.com&upmbps=50&downmbps=100#Hysteria',
+    'naive+https://user:password@naive.example.com:443?sni=naive.example.com&alpn=h2#Naive',
   ];
   const directory = mkdtempSync(join(tmpdir(), 'warpy-config-test-'));
   try {

@@ -6,10 +6,10 @@ export const MAX_SUBSCRIPTION_TEXT_LENGTH = 2 * 1024 * 1024;
 export const MAX_SUBSCRIPTION_PROFILES = 2000;
 export const AUTO_SUBSCRIPTION_REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-const PROFILE_SCHEMES = /^(?:vless|trojan|hysteria2|hy2|vmess|ss|socks5?|wg|wireguard|tuic|hysteria):\/\//i;
+const PROFILE_SCHEMES = /^(?:vless|trojan|hysteria2|hy2|vmess|ss|socks5?|wg|wireguard|tuic|hysteria|naive(?:\+https|\+quic)?):\/\//i;
 const ANY_URI_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 const SING_BOX_PROTOCOLS = new Set([
-  'vless', 'trojan', 'hysteria2', 'vmess', 'shadowsocks', 'socks', 'wireguard', 'tuic', 'hysteria',
+  'vless', 'trojan', 'hysteria2', 'vmess', 'shadowsocks', 'socks', 'wireguard', 'tuic', 'hysteria', 'naive',
 ]);
 const SING_BOX_TRANSPORTS = new Set(['tcp', 'raw', 'ws', 'grpc', 'http', 'httpupgrade', 'xhttp']);
 const CLASH_NETWORKS = new Map([
@@ -232,6 +232,11 @@ function singBoxOutboundToProfile(value) {
   } else if (protocol === 'socks') {
     profile.username = stringValue(outbound.username);
     profile.password = secretValue(outbound.password);
+  } else if (protocol === 'naive') {
+    profile.username = stringValue(outbound.username);
+    profile.password = secretValue(outbound.password);
+    profile.naiveQuic = outbound.quic === true;
+    if (!profile.username || !profile.password) return null;
   } else if (protocol === 'wireguard') {
     profile.privateKey = secretValue(outbound.private_key);
     profile.peerPublicKey = stringValue(outbound.peer_public_key) || stringValue(peer?.public_key);
@@ -377,7 +382,7 @@ function clashProxyToProfile(value) {
     if (shortId) profile.sid = shortId;
   } else if (
     propertyValue(proxy, ['tls']) === true ||
-    ['trojan', 'hysteria2', 'tuic', 'hysteria'].includes(protocol)
+    ['trojan', 'hysteria2', 'tuic', 'hysteria', 'naive'].includes(protocol)
   ) {
     profile.security = 'tls';
   }
@@ -449,6 +454,11 @@ function clashProxyToProfile(value) {
   } else if (protocol === 'socks') {
     profile.username = stringValue(propertyValue(proxy, ['username']));
     profile.password = firstSecret(proxy, ['password']);
+  } else if (protocol === 'naive') {
+    profile.username = stringValue(propertyValue(proxy, ['username']));
+    profile.password = firstSecret(proxy, ['password']);
+    profile.naiveQuic = propertyValue(proxy, ['quic']) === true;
+    if (!profile.username || !profile.password) return null;
   } else if (protocol === 'wireguard') {
     profile.privateKey = firstSecret(proxy, ['private-key', 'private_key']);
     profile.peerPublicKey = stringValue(propertyValue(proxy, ['public-key', 'public_key']));
@@ -555,6 +565,7 @@ function profileSemanticValues(profile) {
     profile?.mtu,
     profile?.congestionControl,
     profile?.udpRelayMode,
+    profile?.naiveQuic,
   ];
 }
 
@@ -677,7 +688,7 @@ function parseUriList(value) {
 
   for (const token of value.split(/\s+/).map(item => item.trim()).filter(Boolean)) {
     if (token.startsWith('#')) continue;
-    if (!PROFILE_SCHEMES.test(token)) {
+    if (!isProfileLink(token)) {
       if (ANY_URI_SCHEME.test(token)) skipped += 1;
       continue;
     }
@@ -697,6 +708,16 @@ function parseUriList(value) {
   }
 
   return { profiles, skipped };
+}
+
+function isProfileLink(value) {
+  if (PROFILE_SCHEMES.test(value)) return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && Boolean(url.username) && Boolean(url.password);
+  } catch {
+    return false;
+  }
 }
 
 export function parseSubscriptionPayload(payload) {

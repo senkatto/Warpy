@@ -34,6 +34,7 @@ class SingBoxConfigBuilderTest {
             "wg://wg.example.com:51820?pk=private&peer_pk=public&local_address=10.0.0.2%2F32#WG" to "wireguard",
             "tuic://00000000-0000-4000-8000-000000000123:secret@tuic.example.com:443?sni=tuic.example.com#TUIC" to "tuic",
             "hysteria://hy.example.com:443?auth=secret&peer=hy.example.com&upmbps=50&downmbps=100#Hysteria" to "hysteria",
+            "naive+https://alice:s%40cret@naive.example.com:443?sni=front.example.com&alpn=h2%2Chttp%2F1.1#Naive" to "naive",
         )
 
         links.forEach { (link, expectedType) ->
@@ -50,6 +51,23 @@ class SingBoxConfigBuilderTest {
                 assertEquals(expectedType, root.getJSONArray("outbounds").getJSONObject(0).getString("type"))
             }
         }
+    }
+
+    @Test
+    fun `naive preserves credentials tls and quic mode`() {
+        val naive = ProfileParser.parse(
+            "naive+quic://alice:s%40cret@naive.example.com:443?sni=front.example.com&alpn=h2%2Chttp%2F1.1#Naive",
+        ).getOrThrow()
+        val outbound = JSONObject(SingBoxConfigBuilder.build(AppSettings(profiles = listOf(naive))))
+            .getJSONArray("outbounds")
+            .getJSONObject(0)
+
+        assertEquals("naive", outbound.getString("type"))
+        assertEquals("alice", outbound.getString("username"))
+        assertEquals("s@cret", outbound.getString("password"))
+        assertTrue(outbound.getBoolean("quic"))
+        assertEquals("front.example.com", outbound.getJSONObject("tls").getString("server_name"))
+        assertFalse(outbound.getJSONObject("tls").has("utls"))
     }
 
     @Test

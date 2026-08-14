@@ -359,6 +359,17 @@ object SingBoxConfigBuilder {
             .put("up_mbps", hysteria2UpMbps.takeIf { it > 0 })
             .put("down_mbps", hysteria2DownMbps.takeIf { it > 0 })
             .put("tls", tlsForGeneric(required = true))
+
+        Protocol.Naive -> JSONObject()
+            .put("type", "naive")
+            .put("tag", customTag)
+            .put("server", server)
+            .put("server_port", port)
+            .put("username", username)
+            .put("password", password)
+            .put("quic", naiveQuic)
+            .put("tls", tlsForNaive())
+            .withTcpDialDefaults()
     }
 
     private fun JSONObject.withTcpDialDefaults(): JSONObject =
@@ -395,6 +406,14 @@ object SingBoxConfigBuilder {
                 if (alpn.isNotEmpty()) put("alpn", alpn.toJsonArray())
             }
     }
+
+    private fun VpnProfile.tlsForNaive(): JSONObject = JSONObject()
+        .put("enabled", true)
+        .put("server_name", sni.ifBlank { server })
+        .put("insecure", allowInsecure)
+        .apply {
+            if (alpn.isNotEmpty()) put("alpn", alpn.toJsonArray())
+        }
 
     private fun splitValues(value: String): JSONArray = value
         .split(',', ';')

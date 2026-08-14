@@ -32,6 +32,9 @@ Var WarpyUserDataDir
     CopyFiles /SILENT "$INSTDIR\${MAINBINARYNAME}.exe" "$WarpyRollbackDir\${MAINBINARYNAME}.exe"
     CopyFiles /SILENT "$INSTDIR\sing-box.exe" "$WarpyRollbackDir\sing-box.exe"
     CopyFiles /SILENT "$INSTDIR\bin\wintun.dll" "$WarpyRollbackDir\bin\wintun.dll"
+    ${If} ${FileExists} "$INSTDIR\bin\libcronet.dll"
+      CopyFiles /SILENT "$INSTDIR\bin\libcronet.dll" "$WarpyRollbackDir\bin\libcronet.dll"
+    ${EndIf}
     CopyFiles /SILENT "$INSTDIR\flags\*.*" "$WarpyRollbackDir\flags"
     ${If} ${FileExists} "$INSTDIR\uninstall.exe"
       CopyFiles /SILENT "$INSTDIR\uninstall.exe" "$WarpyRollbackDir\uninstall.exe"
@@ -70,6 +73,7 @@ Var WarpyUserDataDir
   SetOverwrite on
   Delete "$INSTDIR\sing-box.exe"
   Delete "$INSTDIR\bin\wintun.dll"
+  Delete "$INSTDIR\bin\libcronet.dll"
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -141,6 +145,9 @@ Var WarpyUserDataDir
       ClearErrors
       CopyFiles /SILENT "$WarpyRollbackDir\sing-box.exe" "$INSTDIR\sing-box.exe"
       CopyFiles /SILENT "$WarpyRollbackDir\bin\wintun.dll" "$INSTDIR\bin\wintun.dll"
+      ${If} ${FileExists} "$WarpyRollbackDir\bin\libcronet.dll"
+        CopyFiles /SILENT "$WarpyRollbackDir\bin\libcronet.dll" "$INSTDIR\bin\libcronet.dll"
+      ${EndIf}
       CopyFiles /SILENT "$WarpyRollbackDir\flags\*.*" "$INSTDIR\flags"
       ${If} ${FileExists} "$WarpyRollbackDir\uninstall.exe"
         CopyFiles /SILENT "$WarpyRollbackDir\uninstall.exe" "$INSTDIR\uninstall.exe"

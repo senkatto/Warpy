@@ -25,6 +25,24 @@ class SingBoxConfigBuilderTest {
     )
 
     @Test
+    fun `runtime config contains only the active profile`() {
+        val inactive = profile.copy(name = "inactive", server = "inactive.example.com")
+        val active = profile.copy(name = "active", server = "active.example.com")
+
+        val config = SingBoxConfigBuilder.build(
+            AppSettings(profiles = listOf(inactive, active), activeProfileIndex = 1),
+        )
+        val root = JSONObject(config)
+        val selector = root.getJSONArray("outbounds")
+            .let { outbounds -> (0 until outbounds.length()).map(outbounds::getJSONObject) }
+            .single { it.optString("tag") == "proxy" }
+
+        assertEquals(listOf("profile_1"), listOf(selector.getJSONArray("outbounds").getString(0)))
+        assertTrue(config.contains("active.example.com"))
+        assertFalse(config.contains("inactive.example.com"))
+    }
+
+    @Test
     fun `auto detected protocols produce selectable sing box configs`() {
         val vmessJson = """{"v":"2","ps":"VMess","add":"vmess.example.com","port":"443","id":"00000000-0000-4000-8000-000000000123","aid":"0","scy":"auto","net":"ws","host":"cdn.example.com","path":"/ws","tls":"tls","sni":"cdn.example.com"}"""
         val links = listOf(

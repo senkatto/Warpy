@@ -53,6 +53,23 @@ impl fmt::Display for SelectorSwitchError {
 }
 
 impl SelectorControl {
+    pub(crate) fn outbounds(&self) -> Vec<String> {
+        self.outbounds.iter().cloned().collect()
+    }
+
+    pub(crate) fn wait_until_ready(&self, timeout: Duration) -> Result<(), String> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if TcpStream::connect_timeout(&self.address, Duration::from_millis(200)).is_ok() {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("Служба проверки профилей не запустилась".to_string());
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     pub(crate) fn selected(&self) -> &str {
         &self.selected
     }

@@ -1,8 +1,13 @@
 import {
+  buildSelectableSingBoxConfig,
   buildRuntimeSingBoxConfig,
   parseProfileLink,
   profileShareLink,
 } from './vpn-config.js';
+
+const PROFILE_PROBE_TTL_MS = 3 * 60 * 1000;
+const profileProbeCache = new Map();
+let profileProbeInFlight = false;
 import {
   findProfileIndexAfterSubscriptionUpdate,
   parseSubscriptionPayload,
@@ -2550,11 +2555,17 @@ function createProfileItemEl(p, i) {
   titleEl.className = 'p-item-title';
   titleEl.appendChild(createTextElement('span', 'p-item-name', display.name));
   infoEl.appendChild(titleEl);
-  infoEl.appendChild(createTextElement(
+  const probe = profileProbeCache.get(profileRuntimeKey(p));
+  const probeText = !probe ? (S.lang === 'ru' ? 'не проверен' : 'not checked')
+    : probe.state === 'checking' ? (S.lang === 'ru' ? 'проверка…' : 'checking…')
+      : probe.delayMs ? `${probe.delayMs} ms`
+        : (S.lang === 'ru' ? 'недоступен' : 'unavailable');
+  const detailsEl = createTextElement(
     'span',
-    'p-item-proto',
-    `${String(p.protocol).toUpperCase()} · ${p.host}:${p.port}`
-  ));
+    `p-item-proto${probe?.state === 'unavailable' ? ' unavailable' : ''}`,
+    `${String(p.protocol).toUpperCase()} · ${p.host}:${p.port} · ${probeText}`
+  );
+  infoEl.appendChild(detailsEl);
   el.appendChild(infoEl);
 
   const actionsEl = document.createElement('div');
@@ -2637,6 +2648,7 @@ function renderProfiles() {
   const backButton = $('profiles-back-btn');
   const closeButton = $('close-profiles');
   const { groups, ungrouped } = partitionProfiles();
+  void refreshProfileProbes();
 
   if (profilesViewGroup && !groups[profilesViewGroup]) profilesViewGroup = null;
   const isGroupView = profilesViewGroup !== null;
@@ -2738,6 +2750,52 @@ function renderProfiles() {
 
   // Render Ungrouped
   ungrouped.forEach(item => list.appendChild(createProfileItemEl(item.profile, item.index)));
+}
+
+async function refreshProfileProbes(force = false) {
+  if (profileProbeInFlight || !S.profiles.length) return;
+  if (S.status === 'connected' || S.status === 'connecting') return;
+  const now = Date.now();
+  const staleProfiles = S.profiles.filter(profile => {
+    const cached = profileProbeCache.get(profileRuntimeKey(profile));
+    return force || !cached || now - cached.checkedAt > PROFILE_PROBE_TTL_MS;
+  });
+  if (!staleProfiles.length) return;
+
+  profileProbeInFlight = true;
+  S.profiles.forEach(profile => {
+    profileProbeCache.set(profileRuntimeKey(profile), {
+      state: 'checking',
+      delayMs: null,
+      checkedAt: now,
+    });
+  });
+  renderProfiles();
+  try {
+    const config = buildSelectableSingBoxConfig(S.profiles, S.active, currentVpnSettings());
+    const results = await invoke('probe_profiles', { config: JSON.stringify(config) });
+    const checkedAt = Date.now();
+    results.forEach(result => {
+      const profile = S.profiles[result.index];
+      if (!profile) return;
+      profileProbeCache.set(profileRuntimeKey(profile), {
+        state: result.delayMs > 0 ? 'available' : 'unavailable',
+        delayMs: result.delayMs || null,
+        checkedAt,
+      });
+    });
+  } catch (error) {
+    const checkedAt = Date.now();
+    S.profiles.forEach(profile => profileProbeCache.set(profileRuntimeKey(profile), {
+      state: 'unavailable',
+      delayMs: null,
+      checkedAt,
+    }));
+    await logMsg(`Profile probe failed: ${error}`);
+  } finally {
+    profileProbeInFlight = false;
+    renderProfiles();
+  }
 }
 
 function partitionProfiles(profiles = S.profiles) {
@@ -2978,12 +3036,7 @@ async function stopVpn() {
     try {
       if (S.startCommandDispatched) await invoke('cancel_vpn_start');
       S.startCommandDispatched = false;
-      S.commandPending = null;
-      S.status = 'stopped';
-      S.runtimeProfileKeys = [];
-      stopTimers();
-      syncUI();
-      return true;
+      return queueVpnOperation(stopVpnOperation);
     } catch (error) {
       S.commandPending = null;
       S.commandError = String(error).replace(/^Error:\s*/, '');

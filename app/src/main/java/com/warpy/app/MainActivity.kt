@@ -195,6 +195,7 @@ import com.warpy.app.localization.WarpyLocalization
 import com.warpy.app.localization.resolveAppLanguage
 import com.warpy.app.ui.WarpyTheme
 import com.warpy.app.vpn.WarpyService
+import com.warpy.app.vpn.ProfileProbeService
 import com.warpy.app.vpn.SingBoxConfigBuilder
 import com.warpy.app.vpn.VpnPermissionState
 import com.warpy.app.vpn.VpnStartHelper
@@ -392,12 +393,19 @@ private fun WarpyApp(viewModel: MainViewModel = viewModel()) {
                         val txSpeed = intent.getLongExtra(WarpyService.EXTRA_TX_SPEED, 0L)
                         viewModel.setTrafficStats(rxSpeed, txSpeed)
                     }
+                    ProfileProbeService.ACTION_RESULT -> viewModel.applyProfileProbeResult(
+                        index = intent.getIntExtra(ProfileProbeService.EXTRA_INDEX, -1),
+                        delayMillis = intent.getIntExtra(ProfileProbeService.EXTRA_DELAY_MS, -1),
+                    )
+                    ProfileProbeService.ACTION_FINISHED -> viewModel.finishProfileProbes()
                 }
             }
         }
         val filter = IntentFilter().apply {
             addAction(WarpyService.ACTION_STATUS)
             addAction(WarpyService.ACTION_STATS)
+            addAction(ProfileProbeService.ACTION_RESULT)
+            addAction(ProfileProbeService.ACTION_FINISHED)
         }
         ContextCompat.registerReceiver(
             context,
@@ -620,6 +628,8 @@ private fun WarpyApp(viewModel: MainViewModel = viewModel()) {
         ProfilesOverlay(
             profiles = state.settings.profiles,
             activeIndex = displayedProfileIndex,
+            probes = state.profileProbes,
+            onRefreshProbes = { viewModel.refreshProfileProbes() },
             onDismiss = { showProfiles = false },
             onSelect = onSelect@{ index ->
                 if (index == displayedProfileIndex) {
@@ -2045,12 +2055,18 @@ private fun GroupHeaderRow(
 private fun ProfilesOverlay(
     profiles: List<VpnProfile>,
     activeIndex: Int,
+    probes: Map<Int, ProfileProbeResult>,
+    onRefreshProbes: () -> Unit,
     onDismiss: () -> Unit,
     onSelect: (Int) -> Unit,
     onShare: (VpnProfile) -> Unit,
     onDelete: (Int) -> Unit,
 ) {
     val active = profiles.getOrNull(activeIndex)
+
+    LaunchedEffect(profiles) {
+        onRefreshProbes()
+    }
 
     val grouped = remember(profiles) {
         profiles.mapIndexed { index, p -> index to p }
@@ -2165,6 +2181,7 @@ private fun ProfilesOverlay(
                             ProfileRow(
                                 profile = profile,
                                 selected = index == activeIndex,
+                                probe = probes[index],
                                 onClick = { onSelect(index) },
                                 onShare = { onShare(profile) },
                                 onDelete = { onDelete(index) },
@@ -2226,6 +2243,7 @@ private fun ProfilesOverlay(
                                 ProfileRow(
                                     profile = profile,
                                     selected = index == activeIndex,
+                                    probe = probes[index],
                                     onClick = { onSelect(index) },
                                     onShare = { onShare(profile) },
                                     onDelete = { onDelete(index) },
@@ -2244,6 +2262,7 @@ private fun ProfilesOverlay(
 private fun ProfileRow(
     profile: VpnProfile,
     selected: Boolean,
+    probe: ProfileProbeResult?,
     onClick: () -> Unit,
     onShare: () -> Unit,
     onDelete: () -> Unit,
@@ -2264,7 +2283,23 @@ private fun ProfileRow(
         ProtocolChip(profile.protocol)
         Column(modifier = Modifier.weight(1f)) {
             Text(profile.displayName(), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${profile.server}:${profile.port}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val probeText = when (probe?.status) {
+                ProfileProbeStatus.Checking -> "проверка…"
+                ProfileProbeStatus.Available -> "${probe.delayMillis} мс"
+                ProfileProbeStatus.Unavailable -> "недоступен"
+                null -> "не проверен"
+            }
+            Text(
+                "${profile.server}:${profile.port} · $probeText",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (probe?.status == ProfileProbeStatus.Unavailable) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         if (selected) {
             Text("выбран", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

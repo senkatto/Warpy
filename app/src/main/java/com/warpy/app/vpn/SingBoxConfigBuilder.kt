@@ -28,8 +28,8 @@ object SingBoxConfigBuilder {
         val outboundTags = JSONArray()
         val endpoints = JSONArray()
 
-        settings.profiles.forEachIndexed { index, prof ->
-            val tag = "profile_$index"
+        settings.profiles.getOrNull(settings.activeProfileIndex)?.let { prof ->
+            val tag = "profile_${settings.activeProfileIndex}"
             if (prof.protocol == Protocol.WireGuard) {
                 endpoints.put(prof.toWireGuardEndpoint(tag))
             } else {
@@ -57,6 +57,74 @@ object SingBoxConfigBuilder {
             .put("outbounds", outbounds)
             .apply { if (endpoints.length() > 0) put("endpoints", endpoints) }
             .put("route", route(settings, filesDir, settings.profiles.getOrNull(settings.activeProfileIndex)))
+            .toString(2)
+    }
+
+    fun buildProbe(
+        settings: AppSettings,
+        controllerPort: Int,
+        controllerSecret: String,
+    ): String {
+        val outbounds = JSONArray()
+        val outboundTags = JSONArray()
+        val endpoints = JSONArray()
+        settings.profiles.forEachIndexed { index, profile ->
+            val tag = "profile_$index"
+            if (profile.protocol == Protocol.WireGuard) {
+                endpoints.put(profile.toWireGuardEndpoint(tag))
+            } else {
+                outbounds.put(profile.toOutbound(tag))
+            }
+            outboundTags.put(tag)
+        }
+        outbounds.put(
+            JSONObject()
+                .put("type", "selector")
+                .put("tag", CoreContract.Tags.proxy)
+                .put("outbounds", outboundTags)
+                .put("default", "profile_0"),
+        )
+        outbounds.put(JSONObject(mapOf("type" to "direct", "tag" to CoreContract.Tags.direct)))
+        outbounds.put(JSONObject(mapOf("type" to "block", "tag" to CoreContract.Tags.block)))
+
+        return JSONObject()
+            .put("log", JSONObject(mapOf("level" to "warn")))
+            .put(
+                "dns",
+                JSONObject()
+                    .put(
+                        "servers",
+                        JSONArray().put(
+                            JSONObject()
+                                .put("type", CoreContract.Android.localDnsType)
+                                .put("tag", "probe-dns"),
+                        ),
+                    )
+                    .put("final", "probe-dns")
+                    .put("strategy", CoreContract.Dns.strategy),
+            )
+            .put("outbounds", outbounds)
+            .apply { if (endpoints.length() > 0) put("endpoints", endpoints) }
+            .put(
+                "route",
+                JSONObject()
+                    .put("final", CoreContract.Tags.direct)
+                    .put(
+                        "default_domain_resolver",
+                        JSONObject()
+                            .put("server", "probe-dns")
+                            .put("strategy", CoreContract.Dns.strategy),
+                    ),
+            )
+            .put(
+                "experimental",
+                JSONObject().put(
+                    "clash_api",
+                    JSONObject()
+                        .put("external_controller", "127.0.0.1:$controllerPort")
+                        .put("secret", controllerSecret),
+                ),
+            )
             .toString(2)
     }
 

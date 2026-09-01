@@ -4,6 +4,8 @@ mod diagnostics;
 #[cfg(windows)]
 mod network_context;
 #[cfg(windows)]
+mod profile_probe;
+#[cfg(windows)]
 mod subscription;
 mod tray_menu;
 mod updates;
@@ -73,6 +75,33 @@ fn validate_runtime_outbound(outbound: &str) -> Result<(), String> {
         return Err("Invalid runtime profile identifier".to_string());
     }
     Ok(())
+}
+
+#[cfg(windows)]
+#[tauri::command]
+fn probe_profiles(
+    app: tauri::AppHandle,
+    config: String,
+) -> Result<Vec<profile_probe::ProfileProbeResult>, String> {
+    ensure_text_size(&config, MAX_VPN_CONFIG_BYTES, "VPN config")?;
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let executable_dir = executable
+        .parent()
+        .ok_or_else(|| "Некорректный путь Warpy".to_string())?;
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| error.to_string())?;
+    let core = [
+        executable_dir.join("sing-box.exe"),
+        executable_dir.join("sing-box-x86_64-pc-windows-msvc.exe"),
+        resource_dir.join("sing-box.exe"),
+        resource_dir.join("resources").join("sing-box.exe"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .ok_or_else(|| "VPN-ядро sing-box не найдено".to_string())?;
+    profile_probe::run(&core, &config)
 }
 
 struct AppState {
@@ -773,6 +802,7 @@ fn run_app(
             get_vpn_runtime_snapshot,
             get_vpn_started_at,
             get_vpn_network_stats,
+            probe_profiles,
             get_kill_switch_status,
             start_vpn,
             forget_vpn_outbound,

@@ -56,6 +56,11 @@
         </service>
 
         <service
+            android:name=".vpn.ProfileProbeService"
+            android:exported="false"
+            android:process=":profile_probe" />
+
+        <service
             android:name=".vpn.WarpyTileService"
             android:exported="true"
             android:icon="@drawable/ic_qs_warpy"

@@ -256,6 +256,7 @@ html,body{background:transparent;margin:0;padding:0;width:420px;height:720px;ove
 .p-item-info{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
 .p-item-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
 .p-item-proto{font-size:10px;color:rgba(255,255,255,.4);font-weight:600;text-transform:uppercase}
+.p-item-proto.unavailable{color:#ff5d62}
 .active-dot{position:relative;width:9px;height:9px;flex:0 0 9px;border-radius:50%;background:#00c07f;box-shadow:0 0 7px rgba(0,192,127,.55)}
 .active-dot::after{content:"";position:absolute;inset:-4px;border:1.5px solid rgba(0,192,127,.68);border-radius:50%;animation:active-dot-pulse 1.45s cubic-bezier(.2,0,0,1) infinite;pointer-events:none}
 @keyframes active-dot-pulse{0%{transform:scale(.55);opacity:0}20%{opacity:.75}100%{transform:scale(1.55);opacity:0}}

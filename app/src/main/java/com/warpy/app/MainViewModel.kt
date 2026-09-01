@@ -21,6 +21,7 @@ import com.warpy.app.model.SpeedTestState
 import com.warpy.app.model.VpnStatus
 import com.warpy.app.model.VpnProfile
 import com.warpy.app.vpn.SingBoxConfigBuilder
+import com.warpy.app.vpn.ProfileProbeService
 import com.warpy.app.vpn.VpnCommandCoordinator
 import com.warpy.app.vpn.VpnLaunchResult
 import com.warpy.app.updates.AndroidRelease
@@ -56,6 +57,14 @@ data class MainUiState(
     val pendingImportedProfileIndex: Int? = null,
     val autoConnectImportedProfileIndex: Int? = null,
     val update: UpdateUiState = UpdateUiState(),
+    val profileProbes: Map<Int, ProfileProbeResult> = emptyMap(),
+)
+
+enum class ProfileProbeStatus { Checking, Available, Unavailable }
+
+data class ProfileProbeResult(
+    val status: ProfileProbeStatus,
+    val delayMillis: Int? = null,
 )
 
 internal enum class ProfileRemovalRuntimeAction {
@@ -98,6 +107,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingRelease: AndroidRelease? = null
     private var lastAutomaticUpdateCheckAt = 0L
     private var updateCheckInFlight = false
+    private var profileProbeInFlight = false
+    private var profileProbeCheckedAt = 0L
+    private var profileProbeSignature = ""
 
     init {
         handler.post { regenerateConfig() }
@@ -198,6 +210,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (_state.value.update.stage == UpdateStage.Available) {
             _state.value = _state.value.copy(update = UpdateUiState())
         }
+    }
+
+    fun refreshProfileProbes(force: Boolean = false) {
+        val current = _state.value
+        val profiles = current.settings.profiles
+        if (profiles.isEmpty() || profileProbeInFlight) return
+        if (current.diagnostics.status == VpnStatus.Connected ||
+            current.diagnostics.status == VpnStatus.Connecting
+        ) return
+        val signature = profiles.joinToString("\u0000") { "${it.protocol}:${it.server}:${it.port}:${it.name}" }
+        val fresh = signature == profileProbeSignature &&
+            SystemClock.elapsedRealtime() - profileProbeCheckedAt < PROFILE_PROBE_TTL_MS &&
+            current.profileProbes.size == profiles.size
+        if (!force && fresh) return
+
+        profileProbeInFlight = true
+        profileProbeSignature = signature
+        _state.value = current.copy(
+            profileProbes = profiles.indices.associateWith {
+                ProfileProbeResult(ProfileProbeStatus.Checking)
+            },
+        )
+        getApplication<Application>().startService(
+            Intent(getApplication(), ProfileProbeService::class.java)
+                .setAction(ProfileProbeService.ACTION_PROBE),
+        )
+    }
+
+    fun applyProfileProbeResult(index: Int, delayMillis: Int) {
+        if (index !in _state.value.settings.profiles.indices) return
+        val result = if (delayMillis > 0) {
+            ProfileProbeResult(ProfileProbeStatus.Available, delayMillis)
+        } else {
+            ProfileProbeResult(ProfileProbeStatus.Unavailable)
+        }
+        _state.value = _state.value.copy(profileProbes = _state.value.profileProbes + (index to result))
+    }
+
+    fun finishProfileProbes() {
+        profileProbeInFlight = false
+        profileProbeCheckedAt = SystemClock.elapsedRealtime()
     }
 
     fun canInstallUpdates(): Boolean = updater.canRequestPackageInstalls()
@@ -688,6 +741,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun updateSettings(settings: AppSettings): Boolean {
+        val profilesChanged = settings.profiles != _state.value.settings.profiles
         val normalizedSettings = settings.copy(
             activeProfileIndex = settings.activeProfileIndex.coerceIn(0, settings.profiles.lastIndex.coerceAtLeast(0))
         )
@@ -695,7 +749,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             fail("Не удалось сохранить настройки")
             return false
         }
-        _state.value = _state.value.copy(settings = normalizedSettings)
+        _state.value = _state.value.copy(
+            settings = normalizedSettings,
+            profileProbes = if (profilesChanged) emptyMap() else _state.value.profileProbes,
+        )
+        if (profilesChanged) {
+            profileProbeCheckedAt = 0L
+            profileProbeSignature = ""
+        }
         return true
     }
 
@@ -1039,6 +1100,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         const val STATS_INTERVAL_MS = 1000L
         const val PING_TIMEOUT_MS = 2500L
+        const val PROFILE_PROBE_TTL_MS = 3 * 60 * 1000L
         const val PING_FALLBACK_HOST = "1.1.1.1"
         const val PING_FALLBACK_PORT = 443
         const val SPEED_TEST_PROXY_HOST = "127.0.0.1"

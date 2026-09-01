@@ -768,6 +768,7 @@ private fun UpdateBanner(
     ) {
         Surface(
             color = Color(0xFF202123),
+            contentColor = Color.White,
             shape = RoundedCornerShape(16.dp),
             border = BorderStroke(1.dp, Color(0x3300C07F)),
             shadowElevation = 10.dp,
@@ -801,9 +802,14 @@ private fun UpdateBanner(
                         }
                     }
                     if (state.stage == UpdateStage.Available || state.stage == UpdateStage.Error) {
-                        TextButton(onClick = onLater) { Text("Позже") }
+                        TextButton(onClick = onLater) {
+                            Text("Позже", color = Color.White.copy(alpha = 0.72f))
+                        }
                         TextButton(onClick = onInstall) {
-                            Text(if (state.stage == UpdateStage.Error) "Повторить" else "Обновить")
+                            Text(
+                                text = if (state.stage == UpdateStage.Error) "Повторить" else "Обновить",
+                                color = Color(0xFF5BE0B1),
+                            )
                         }
                     }
                 }

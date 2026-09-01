@@ -1687,12 +1687,15 @@ private fun Protocol.label(): String = when (this) {
 }
 
 @Composable
-private fun ProtocolChip(protocol: Protocol) {
+private fun ProtocolChip(protocol: Protocol, active: Boolean = false) {
     Surface(
         shape = RoundedCornerShape(10.dp),
         color = Color.Transparent,
         contentColor = MaterialTheme.colorScheme.onSurface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        border = BorderStroke(
+            1.dp,
+            if (active) SETTINGS_TITLE_GREEN else MaterialTheme.colorScheme.outlineVariant,
+        ),
     ) {
         Text(
             text = protocol.label(),
@@ -2285,14 +2288,7 @@ private fun ProfileRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (selected) {
-            Box(
-                modifier = Modifier
-                    .size(9.dp)
-                    .background(SETTINGS_TITLE_GREEN, CircleShape),
-            )
-        }
-        ProtocolChip(profile.protocol)
+        ProtocolChip(profile.protocol, active = selected)
         Column(modifier = Modifier.weight(1f)) {
             Text(profile.displayName(), maxLines = 1, overflow = TextOverflow.Ellipsis)
             val probeText = when (probe?.status) {

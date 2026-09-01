@@ -2279,12 +2279,19 @@ private fun ProfileRow(
             .fillMaxWidth()
             .defaultMinSize(minHeight = ProfileListRowMinHeight)
             .clip(RoundedCornerShape(18.dp))
-            .background(if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else Color.Transparent)
+            .background(Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = if (edgeToEdgeContent) 0.dp else 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .size(9.dp)
+                    .background(SETTINGS_TITLE_GREEN, CircleShape),
+            )
+        }
         ProtocolChip(profile.protocol)
         Column(modifier = Modifier.weight(1f)) {
             Text(profile.displayName(), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -2306,17 +2313,14 @@ private fun ProfileRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (selected) {
-            Text("выбран", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        IconButton(onClick = onShare, modifier = Modifier.size(40.dp)) {
+        IconButton(onClick = onShare, modifier = Modifier.size(36.dp)) {
             Icon(
                 Icons.Default.Share,
                 contentDescription = localizedText("Поделиться профилем"),
                 modifier = Modifier.size(20.dp),
             )
         }
-        IconButton(onClick = onDelete, modifier = Modifier.size(40.dp)) {
+        IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
             Icon(
                 Icons.Default.Delete,
                 contentDescription = localizedText("Удалить профиль"),

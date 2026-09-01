@@ -64,11 +64,13 @@ object SingBoxConfigBuilder {
         settings: AppSettings,
         controllerPort: Int,
         controllerSecret: String,
+        profileIndices: List<Int> = settings.profiles.indices.toList(),
     ): String {
         val outbounds = JSONArray()
         val outboundTags = JSONArray()
         val endpoints = JSONArray()
-        settings.profiles.forEachIndexed { index, profile ->
+        profileIndices.forEach { index ->
+            val profile = settings.profiles[index]
             val tag = "profile_$index"
             if (profile.protocol == Protocol.WireGuard) {
                 endpoints.put(profile.toWireGuardEndpoint(tag))
@@ -82,7 +84,7 @@ object SingBoxConfigBuilder {
                 .put("type", "selector")
                 .put("tag", CoreContract.Tags.proxy)
                 .put("outbounds", outboundTags)
-                .put("default", "profile_0"),
+                .put("default", "profile_${profileIndices.first()}"),
         )
         outbounds.put(JSONObject(mapOf("type" to "direct", "tag" to CoreContract.Tags.direct)))
         outbounds.put(JSONObject(mapOf("type" to "block", "tag" to CoreContract.Tags.block)))

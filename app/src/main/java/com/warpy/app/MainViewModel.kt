@@ -212,29 +212,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun refreshProfileProbes(force: Boolean = false) {
+    fun refreshProfileProbes(indices: List<Int>, force: Boolean = false) {
         val current = _state.value
         val profiles = current.settings.profiles
-        if (profiles.isEmpty() || profileProbeInFlight) return
+        val requested = indices.filter { it in profiles.indices }.distinct()
+        if (requested.isEmpty() || profileProbeInFlight) return
         if (current.diagnostics.status == VpnStatus.Connected ||
             current.diagnostics.status == VpnStatus.Connecting
         ) return
         val signature = profiles.joinToString("\u0000") { "${it.protocol}:${it.server}:${it.port}:${it.name}" }
         val fresh = signature == profileProbeSignature &&
             SystemClock.elapsedRealtime() - profileProbeCheckedAt < PROFILE_PROBE_TTL_MS &&
-            current.profileProbes.size == profiles.size
+            requested.all { index ->
+                current.profileProbes[index]?.status?.let { it != ProfileProbeStatus.Checking } == true
+            }
         if (!force && fresh) return
 
         profileProbeInFlight = true
         profileProbeSignature = signature
         _state.value = current.copy(
-            profileProbes = profiles.indices.associateWith {
+            profileProbes = current.profileProbes + requested.associateWith {
                 ProfileProbeResult(ProfileProbeStatus.Checking)
             },
         )
         getApplication<Application>().startService(
             Intent(getApplication(), ProfileProbeService::class.java)
-                .setAction(ProfileProbeService.ACTION_PROBE),
+                .setAction(ProfileProbeService.ACTION_PROBE)
+                .putExtra(ProfileProbeService.EXTRA_INDICES, requested.toIntArray()),
         )
     }
 
@@ -251,6 +255,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun finishProfileProbes() {
         profileProbeInFlight = false
         profileProbeCheckedAt = SystemClock.elapsedRealtime()
+        _state.value = _state.value.copy(
+            profileProbes = _state.value.profileProbes.mapValues { (_, result) ->
+                if (result.status == ProfileProbeStatus.Checking) {
+                    ProfileProbeResult(ProfileProbeStatus.Unavailable)
+                } else {
+                    result
+                }
+            },
+        )
+    }
+
+    private fun cancelProfileProbes() {
+        if (!profileProbeInFlight) return
+        getApplication<Application>().stopService(
+            Intent(getApplication(), ProfileProbeService::class.java),
+        )
+        finishProfileProbes()
     }
 
     fun canInstallUpdates(): Boolean = updater.canRequestPackageInstalls()
@@ -404,6 +425,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun selectProfile(index: Int) {
         val settings = _state.value.settings
         if (index !in settings.profiles.indices) return
+        cancelProfileProbes()
         if (!updateSettings(settings.copy(activeProfileIndex = index))) return
 
         clearCommandError()
@@ -492,6 +514,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     internal fun startVpn(forceRestart: Boolean = false): VpnLaunchResult {
+        cancelProfileProbes()
         val settings = _state.value.settings
         val validationFailure = when {
             settings.profiles.isEmpty() -> VpnLaunchResult.Failed("Сначала добавьте профиль")

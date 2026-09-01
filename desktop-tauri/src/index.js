@@ -2648,10 +2648,13 @@ function renderProfiles() {
   const backButton = $('profiles-back-btn');
   const closeButton = $('close-profiles');
   const { groups, ungrouped } = partitionProfiles();
-  void refreshProfileProbes();
 
   if (profilesViewGroup && !groups[profilesViewGroup]) profilesViewGroup = null;
   const isGroupView = profilesViewGroup !== null;
+  const visibleIndexes = isGroupView
+    ? groups[profilesViewGroup].map(item => item.index)
+    : ungrouped.map(item => item.index);
+  void refreshProfileProbes(false, visibleIndexes);
   title.textContent = isGroupView ? profilesViewGroup : t('profilesTitle');
   addButton.classList.toggle('hidden', isGroupView);
   backButton.classList.toggle('hidden', !isGroupView);
@@ -2752,18 +2755,22 @@ function renderProfiles() {
   ungrouped.forEach(item => list.appendChild(createProfileItemEl(item.profile, item.index)));
 }
 
-async function refreshProfileProbes(force = false) {
+async function refreshProfileProbes(force = false, profileIndexes = S.profiles.map((_, index) => index)) {
   if (profileProbeInFlight || !S.profiles.length) return;
   if (S.status === 'connected' || S.status === 'connecting') return;
+  const indexes = [...new Set(profileIndexes)].filter(index => S.profiles[index]);
+  if (!indexes.length) return;
   const now = Date.now();
-  const staleProfiles = S.profiles.filter(profile => {
+  const staleIndexes = indexes.filter(index => {
+    const profile = S.profiles[index];
     const cached = profileProbeCache.get(profileRuntimeKey(profile));
     return force || !cached || now - cached.checkedAt > PROFILE_PROBE_TTL_MS;
   });
-  if (!staleProfiles.length) return;
+  if (!staleIndexes.length) return;
 
   profileProbeInFlight = true;
-  S.profiles.forEach(profile => {
+  staleIndexes.forEach(index => {
+    const profile = S.profiles[index];
     profileProbeCache.set(profileRuntimeKey(profile), {
       state: 'checking',
       delayMs: null,
@@ -2772,11 +2779,13 @@ async function refreshProfileProbes(force = false) {
   });
   renderProfiles();
   try {
-    const config = buildSelectableSingBoxConfig(S.profiles, S.active, currentVpnSettings());
+    const selectedProfiles = staleIndexes.map(index => S.profiles[index]);
+    const selectedActive = Math.max(0, staleIndexes.indexOf(S.active));
+    const config = buildSelectableSingBoxConfig(selectedProfiles, selectedActive, currentVpnSettings());
     const results = await invoke('probe_profiles', { config: JSON.stringify(config) });
     const checkedAt = Date.now();
     results.forEach(result => {
-      const profile = S.profiles[result.index];
+      const profile = S.profiles[staleIndexes[result.index]];
       if (!profile) return;
       profileProbeCache.set(profileRuntimeKey(profile), {
         state: result.delayMs > 0 ? 'available' : 'unavailable',
@@ -2786,11 +2795,14 @@ async function refreshProfileProbes(force = false) {
     });
   } catch (error) {
     const checkedAt = Date.now();
-    S.profiles.forEach(profile => profileProbeCache.set(profileRuntimeKey(profile), {
-      state: 'unavailable',
-      delayMs: null,
-      checkedAt,
-    }));
+    staleIndexes.forEach(index => {
+      const profile = S.profiles[index];
+      profileProbeCache.set(profileRuntimeKey(profile), {
+        state: 'unavailable',
+        delayMs: null,
+        checkedAt,
+      });
+    });
     await logMsg(`Profile probe failed: ${error}`);
   } finally {
     profileProbeInFlight = false;

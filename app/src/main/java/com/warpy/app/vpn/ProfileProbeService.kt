@@ -61,13 +61,17 @@ class ProfileProbeService : Service(), PlatformInterface, CommandServerHandler {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action != ACTION_PROBE) return START_NOT_STICKY
-        scope.launch { runProbe(startId) }
+        val indices = intent.getIntArrayExtra(EXTRA_INDICES)?.toList().orEmpty()
+        scope.launch { runProbe(startId, indices) }
         return START_NOT_STICKY
     }
 
-    private suspend fun runProbe(startId: Int) {
+    private suspend fun runProbe(startId: Int, requestedIndices: List<Int>) {
         val settings = SettingsStore(this).load()
-        if (settings.profiles.isEmpty()) {
+        val indices = requestedIndices
+            .filter { it in settings.profiles.indices }
+            .distinct()
+        if (indices.isEmpty()) {
             finish(startId)
             return
         }
@@ -77,7 +81,7 @@ class ProfileProbeService : Service(), PlatformInterface, CommandServerHandler {
         }
         val secret = UUID.randomUUID().toString()
         try {
-            val config = SingBoxConfigBuilder.buildProbe(settings, port, secret)
+            val config = SingBoxConfigBuilder.buildProbe(settings, port, secret, indices)
             Libbox.checkConfig(config)
             val commandServer = CommandServer(this, this)
             server = commandServer
@@ -85,7 +89,7 @@ class ProfileProbeService : Service(), PlatformInterface, CommandServerHandler {
             commandServer.startOrReloadService(config, OverrideOptions())
 
             val semaphore = Semaphore(MAX_CONCURRENT_PROBES)
-            settings.profiles.indices.map { index ->
+            indices.map { index ->
                 scope.async {
                     semaphore.withPermit {
                         val result = runCatching { probe(port, secret, index) }
@@ -96,7 +100,7 @@ class ProfileProbeService : Service(), PlatformInterface, CommandServerHandler {
             }.awaitAll()
         } catch (error: Exception) {
             Log.w(TAG, "profile probe failed", error)
-            settings.profiles.indices.forEach { publish(it, null) }
+            indices.forEach { publish(it, null) }
         } finally {
             runCatching { server?.closeService() }
             runCatching { server?.close() }
@@ -108,35 +112,27 @@ class ProfileProbeService : Service(), PlatformInterface, CommandServerHandler {
     private fun probe(port: Int, secret: String, index: Int): Int {
         val path = "/proxies/profile_$index/delay" +
             "?url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=4000"
-        repeat(2) { attempt ->
-            try {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress("127.0.0.1", port), 2_000)
-                    socket.soTimeout = 7_000
-                    val writer = socket.getOutputStream().bufferedWriter(Charsets.US_ASCII)
-                    writer.write("GET $path HTTP/1.1\r\n")
-                    writer.write("Host: 127.0.0.1:$port\r\n")
-                    writer.write("Authorization: Bearer $secret\r\n")
-                    writer.write("Connection: close\r\n\r\n")
-                    writer.flush()
-                    val response = socket.getInputStream().bufferedReader().readText()
-                    if (!response.startsWith("HTTP/1.1 200") && !response.startsWith("HTTP/1.0 200")) {
-                        error(response.lineSequence().firstOrNull().orEmpty())
-                    }
-                    return Regex("\\\"delay\\\"\\s*:\\s*(\\d+)")
-                        .find(response)
-                        ?.groupValues
-                        ?.get(1)
-                        ?.toIntOrNull()
-                        ?.takeIf { it > 0 }
-                        ?: error("empty delay")
-                }
-            } catch (error: Exception) {
-                if (attempt > 0) throw error
-                Thread.sleep(250)
+        Socket().use { socket ->
+            socket.connect(InetSocketAddress("127.0.0.1", port), 2_000)
+            socket.soTimeout = 6_000
+            val writer = socket.getOutputStream().bufferedWriter(Charsets.US_ASCII)
+            writer.write("GET $path HTTP/1.1\r\n")
+            writer.write("Host: 127.0.0.1:$port\r\n")
+            writer.write("Authorization: Bearer $secret\r\n")
+            writer.write("Connection: close\r\n\r\n")
+            writer.flush()
+            val response = socket.getInputStream().bufferedReader().readText()
+            if (!response.startsWith("HTTP/1.1 200") && !response.startsWith("HTTP/1.0 200")) {
+                error(response.lineSequence().firstOrNull().orEmpty())
             }
+            return Regex("\\\"delay\\\"\\s*:\\s*(\\d+)")
+                .find(response)
+                ?.groupValues
+                ?.get(1)
+                ?.toIntOrNull()
+                ?.takeIf { it > 0 }
+                ?: error("empty delay")
         }
-        error("probe failed")
     }
 
     private fun publish(index: Int, delayMillis: Int?) {
@@ -222,6 +218,7 @@ class ProfileProbeService : Service(), PlatformInterface, CommandServerHandler {
         const val ACTION_FINISHED = "com.warpy.app.PROFILE_PROBE_FINISHED"
         const val EXTRA_INDEX = "profile_index"
         const val EXTRA_DELAY_MS = "delay_ms"
+        const val EXTRA_INDICES = "profile_indices"
         private const val MAX_CONCURRENT_PROBES = 4
         private const val TAG = "WarpyProfileProbe"
     }

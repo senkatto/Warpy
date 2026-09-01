@@ -629,7 +629,7 @@ private fun WarpyApp(viewModel: MainViewModel = viewModel()) {
             profiles = state.settings.profiles,
             activeIndex = displayedProfileIndex,
             probes = state.profileProbes,
-            onRefreshProbes = { viewModel.refreshProfileProbes() },
+            onRefreshProbes = { indices -> viewModel.refreshProfileProbes(indices) },
             onDismiss = { showProfiles = false },
             onSelect = onSelect@{ index ->
                 if (index == displayedProfileIndex) {
@@ -2056,17 +2056,13 @@ private fun ProfilesOverlay(
     profiles: List<VpnProfile>,
     activeIndex: Int,
     probes: Map<Int, ProfileProbeResult>,
-    onRefreshProbes: () -> Unit,
+    onRefreshProbes: (List<Int>) -> Unit,
     onDismiss: () -> Unit,
     onSelect: (Int) -> Unit,
     onShare: (VpnProfile) -> Unit,
     onDelete: (Int) -> Unit,
 ) {
     val active = profiles.getOrNull(activeIndex)
-
-    LaunchedEffect(profiles) {
-        onRefreshProbes()
-    }
 
     val grouped = remember(profiles) {
         profiles.mapIndexed { index, p -> index to p }
@@ -2086,6 +2082,15 @@ private fun ProfilesOverlay(
         if (activeGroupName != null && currentGroupItems.isEmpty()) {
             activeGroupName = null
         }
+    }
+
+    LaunchedEffect(activeGroupName, profiles) {
+        val indices = if (activeGroupName == null) {
+            ungrouped.map { it.first }
+        } else {
+            currentGroupItems.map { it.first }
+        }
+        onRefreshProbes(indices)
     }
 
     // Custom animation states

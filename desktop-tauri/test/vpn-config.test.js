@@ -282,6 +282,16 @@ test('selectable config preserves sniffing and replaces only the active server r
 
   assert.equal(sniffRules.length, 1);
   assert.equal(serverRules.length, 2);
+  assert.deepEqual(config.inbounds[0].route_exclude_address, ['203.0.113.20/32']);
+});
+
+test('excludes an IP VPN endpoint from the Windows TUN route', () => {
+  const profile = parseProfileLink(
+    'vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443'
+      + '?security=reality&sni=www.example.com&pbk=public-key&sid=0123abcd&type=tcp#VLESS',
+  );
+
+  assert.deepEqual(buildSingBoxConfig(profile).inbounds[0].route_exclude_address, ['203.0.113.10/32']);
 });
 
 test('does not hold new connections for a one-second protocol sniff', () => {

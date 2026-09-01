@@ -736,6 +736,9 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
         interface_name: WINDOWS.interfaceName,
         address: WINDOWS.addresses,
         auto_route: true,
+        ...(serverIsIp
+          ? { route_exclude_address: [profile.host.includes(':') ? `${profile.host}/128` : `${profile.host}/32`] }
+          : {}),
         strict_route: WINDOWS.strictRoute,
         stack: WINDOWS.stack,
         mtu: Number(settings.mtu) > 0 ? Number(settings.mtu) : WINDOWS.defaultMtu,
@@ -833,6 +836,14 @@ export function buildSelectableSingBoxConfig(inputProfiles, activeIndex = 0, set
   }
 
   const config = buildSingBoxConfig(profiles[activeIndex], settings);
+  const excludedServerAddresses = [...new Set(profiles
+    .filter(profile => isIpAddress(profile.host))
+    .map(profile => profile.host.includes(':') ? `${profile.host}/128` : `${profile.host}/32`))];
+  if (excludedServerAddresses.length) {
+    config.inbounds[0].route_exclude_address = excludedServerAddresses;
+  } else {
+    delete config.inbounds[0].route_exclude_address;
+  }
   const tags = profiles.map((_, index) => `profile-${index + 1}`);
   const endpoints = profiles
     .map((profile, index) => profile.protocol === 'wireguard'

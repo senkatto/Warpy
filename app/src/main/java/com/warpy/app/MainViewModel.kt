@@ -217,9 +217,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val profiles = current.settings.profiles
         val requested = indices.filter { it in profiles.indices }.distinct()
         if (requested.isEmpty() || profileProbeInFlight) return
-        if (current.diagnostics.status == VpnStatus.Connected ||
-            current.diagnostics.status == VpnStatus.Connecting
-        ) return
         val signature = profiles.joinToString("\u0000") { "${it.protocol}:${it.server}:${it.port}:${it.name}" }
         val fresh = signature == profileProbeSignature &&
             SystemClock.elapsedRealtime() - profileProbeCheckedAt < PROFILE_PROBE_TTL_MS &&

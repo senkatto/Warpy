@@ -70,7 +70,6 @@ const QUIC_BROWSER_PROCESSES = [
   'opera.exe',
   'vivaldi.exe',
 ];
-const RUSSIAN_DOMAIN_SUFFIXES = ROUTING.russianDomainSuffixes;
 const PROXY_DIAL = Object.freeze({
   connectTimeout: '10s',
   tcpKeepAlive: '30s',
@@ -692,11 +691,6 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
       rcode: 'NOERROR',
     });
   }
-  dnsRules.push({
-    domain_suffix: RUSSIAN_DOMAIN_SUFFIXES,
-    action: 'route',
-      server: TAGS.localDns,
-  });
 
   const sites = cleanDomains(settings.sitesList);
   if (settings.sitesMode === 'bypass' && sites.length) {
@@ -798,11 +792,6 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
   if (settings.adblock) {
     rules.push({ domain_suffix: AD_DOMAINS, action: 'reject' });
   }
-  rules.push({
-    domain_suffix: RUSSIAN_DOMAIN_SUFFIXES,
-    action: 'route',
-    outbound: TAGS.direct,
-  });
   if (settings.lan) rules.push({ ip_is_private: true, action: 'route', outbound: TAGS.direct });
 
   const apps = cleanProcessNames(settings.appsList);

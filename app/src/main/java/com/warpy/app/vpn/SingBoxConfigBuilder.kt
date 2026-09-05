@@ -192,11 +192,6 @@ object SingBoxConfigBuilder {
                     .put("server", CoreContract.Tags.block)
             )
         }
-        rules.put(
-            JSONObject()
-                .put("domain_suffix", russianDomainSuffixes())
-                .put("server", CoreContract.Android.localDnsTag)
-        )
 
         return JSONObject()
             .put(
@@ -217,6 +212,11 @@ object SingBoxConfigBuilder {
 
     private fun route(settings: AppSettings, filesDir: String, activeProfile: VpnProfile?): JSONObject {
         val rules = JSONArray()
+            .put(
+                JSONObject()
+                    .put("inbound", JSONArray().put("health-proxy-in"))
+                    .put("outbound", CoreContract.Tags.proxy),
+            )
             .put(JSONObject().put("protocol", "dns").put("action", "hijack-dns"))
         rules.put(
             JSONObject()
@@ -233,11 +233,6 @@ object SingBoxConfigBuilder {
                     .put("outbound", CoreContract.Tags.block),
             )
         }
-        rules.put(
-            JSONObject()
-                .put("domain_suffix", russianDomainSuffixes())
-                .put("outbound", CoreContract.Tags.direct),
-        )
         val tunneledSites = settings.tunneledSites
             .filter(String::isNotBlank)
             .sorted()
@@ -305,8 +300,6 @@ object SingBoxConfigBuilder {
         }
         return ruleSets
     }
-
-    private fun russianDomainSuffixes() = CoreContract.Routing.russianDomainSuffixes.toJsonArray()
 
     private fun VpnProfile.toOutbound(customTag: String = "profile"): JSONObject = when (protocol) {
         Protocol.Vless -> JSONObject()

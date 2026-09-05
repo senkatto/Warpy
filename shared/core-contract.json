@@ -20,7 +20,6 @@
     "strategy": "ipv4_only"
   },
   "routing": {
-    "russianDomainSuffixes": [".ru", ".xn--p1ai", ".su", "ozonusercontent.com"],
     "healthDomainSuffixes": ["speed.cloudflare.com"],
     "blockQuicOnlyWhenEnabled": true
   },

@@ -396,7 +396,7 @@ test('keeps www host exclusions scoped away from sibling Google services', () =>
   assert.equal(siteRule.domain_suffix.includes('gemini.google.com'), false);
 });
 
-test('routes Russian domain zones outside VLESS and Hysteria2 tunnels', () => {
+test('does not force Russian domains outside VLESS and Hysteria2 tunnels', () => {
   const profiles = [
     parseProfileLink(
       'vless://00000000-0000-4000-8000-000000000000@example.com:443'
@@ -411,18 +411,32 @@ test('routes Russian domain zones outside VLESS and Hysteria2 tunnels', () => {
     const directIndex = config.route.rules.findIndex(
       rule => rule.outbound === 'direct' && expected.every(suffix => rule.domain_suffix?.includes(suffix)),
     );
-    const adIndex = config.route.rules.findIndex(
-      rule => rule.action === 'reject' && rule.domain_suffix?.includes('doubleclick.net'),
-    );
-    const quicIndex = config.route.rules.findIndex(rule => rule.network === 'udp' && rule.port === 443);
     const dnsRule = config.dns.rules.find(
       rule => rule.server === 'local-dns' && expected.every(suffix => rule.domain_suffix?.includes(suffix)),
     );
 
-    assert.ok(directIndex > adIndex);
-    assert.ok(quicIndex === -1 || quicIndex < adIndex);
-    assert.ok(dnsRule);
+    assert.equal(directIndex, -1);
+    assert.equal(dnsRule, undefined);
+    assert.equal(config.route.final, 'proxy');
+    for (const mode of ['only', 'bypass']) {
+      const split = buildSingBoxConfig(profile, {sitesMode: mode, sitesList: ['example.ru']});
+      const matching = split.route.rules.filter(rule => rule.domain_suffix?.some(
+        suffix => 'example.ru' === suffix || 'example.ru'.endsWith(suffix.startsWith('.') ? suffix : `.${suffix}`),
+      ));
+      assert.equal(matching.length, 1);
+      assert.equal(matching[0].outbound, mode === 'only' ? 'proxy' : 'direct');
+    }
   }
+});
+
+test('default routing does not suppress the Windows kill switch', () => {
+  const profile = parseProfileLink('hysteria2://secret@203.0.113.10:443#HY2');
+  const {config} = buildRuntimeSingBoxConfig([profile], 0, {
+    killSwitch: true, lan: false, appsMode: 'off', sitesMode: 'off',
+  });
+  assert.equal(config.route.final, 'proxy');
+  assert.equal(config.route.rules.some(rule => rule.action === 'route' && rule.outbound === 'direct'
+    && (rule.process_name || rule.domain_suffix || rule.ip_is_private)), false);
 });
 
 test('uses TUN DNS hijacking without a loopback DNS listener', () => {

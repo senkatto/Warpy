@@ -19,7 +19,7 @@ use crate::vpn_kill_switch::{
     competing_vpn_active, KillSwitchState, VpnKillSwitch, COMPETING_VPN_ERROR,
 };
 #[cfg(windows)]
-use crate::vpn_probe::{verify_tunnel, verify_tunnel_once};
+use crate::vpn_probe::{configure_tunnel_probe, TunnelProbe};
 #[cfg(windows)]
 use crate::vpn_selector::{
     prepare_config as prepare_selector_config, remove_outbound, update_selected_outbound,
@@ -100,6 +100,8 @@ pub(crate) struct VpnEngine {
     #[cfg(windows)]
     selector_control: Mutex<Option<SelectorControl>>,
     #[cfg(windows)]
+    tunnel_probe: Mutex<Option<TunnelProbe>>,
+    #[cfg(windows)]
     kill_switch: Mutex<VpnKillSwitch>,
     recovery: Mutex<RecoveryState>,
     start_cancelled: AtomicBool,
@@ -117,6 +119,8 @@ impl VpnEngine {
             desired_kill_switch: Mutex::new(false),
             #[cfg(windows)]
             selector_control: Mutex::new(None),
+            #[cfg(windows)]
+            tunnel_probe: Mutex::new(None),
             #[cfg(windows)]
             kill_switch: Mutex::new(VpnKillSwitch::new()),
             recovery: Mutex::new(RecoveryState::default()),
@@ -425,7 +429,7 @@ impl VpnEngine {
             return None;
         }
 
-        if state == EngineState::Connected && verify_tunnel().is_ok() {
+        if state == EngineState::Connected && self.verify_tunnel(false).is_ok() {
             return None;
         }
 
@@ -459,6 +463,8 @@ impl VpnEngine {
                 "Не удалось определить активное физическое подключение к интернету".to_string()
             })?;
             set_default_interface(&mut runtime_config, &interface);
+            *self.tunnel_probe.lock().map_err(|error| error.to_string())? =
+                Some(configure_tunnel_probe(&mut runtime_config)?);
         }
         let runtime_config =
             serde_json::to_string(&runtime_config).map_err(|error| error.to_string())?;
@@ -598,6 +604,17 @@ impl VpnEngine {
     }
 
     #[cfg(windows)]
+    fn verify_tunnel(&self, once: bool) -> Result<(), String> {
+        let probe = self.tunnel_probe.lock().map_err(|error| error.to_string())?
+            .clone().ok_or_else(|| "VPN probe is not ready".to_string())?;
+        if once {
+            crate::vpn_probe::verify_tunnel_once(&probe)
+        } else {
+            crate::vpn_probe::verify_tunnel(&probe)
+        }
+    }
+
+    #[cfg(windows)]
     fn verify_started_outbound(&self, quick_probe: bool) -> Result<(), String> {
         let control = self
             .selector_control
@@ -606,9 +623,9 @@ impl VpnEngine {
             .clone();
         let Some(control) = control else {
             return if quick_probe {
-                verify_tunnel_once()
+                self.verify_tunnel(true)
             } else {
-                verify_tunnel()
+                self.verify_tunnel(false)
             };
         };
 
@@ -616,7 +633,7 @@ impl VpnEngine {
         // sing-box's selector delay endpoint can return 504 for a working
         // Naive outbound, which must not add several probe timeouts here.
         self.ensure_start_not_cancelled()?;
-        if verify_tunnel_once().is_ok() {
+        if self.verify_tunnel(true).is_ok() {
             return Ok(());
         }
 
@@ -631,9 +648,8 @@ impl VpnEngine {
             self.ensure_start_not_cancelled()?;
             match control.probe_outbound(&outbound) {
                 Ok(_) => {
-                    // Prime the Windows DNS/TUN path, but do not tear down a verified
-                    // outbound when WinHTTP itself is slow during adapter startup.
-                    let _ = verify_tunnel_once();
+                    // Both checks use the selected proxy; WinHTTP may still be warming up.
+                    let _ = self.verify_tunnel(true);
                     return Ok(());
                 }
                 Err(error) => last_error = error,
@@ -646,7 +662,7 @@ impl VpnEngine {
         // selected tunnel is already carrying traffic. Trust a successful
         // end-to-end request before deciding to tear the tunnel down.
         self.ensure_start_not_cancelled()?;
-        if verify_tunnel().is_ok() {
+        if self.verify_tunnel(false).is_ok() {
             return Ok(());
         }
         Err(last_error)
@@ -662,6 +678,10 @@ impl VpnEngine {
     }
 
     fn stop_core(&self) -> Result<(), String> {
+        #[cfg(windows)]
+        if let Ok(mut probe) = self.tunnel_probe.lock() {
+            *probe = None;
+        }
         let mut lock = self
             .core
             .lock()

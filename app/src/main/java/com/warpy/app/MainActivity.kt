@@ -394,10 +394,13 @@ private fun WarpyApp(viewModel: MainViewModel = viewModel()) {
                         viewModel.setTrafficStats(rxSpeed, txSpeed)
                     }
                     ProfileProbeService.ACTION_RESULT -> viewModel.applyProfileProbeResult(
+                        requestId = intent.getStringExtra(ProfileProbeService.EXTRA_REQUEST_ID).orEmpty(),
                         index = intent.getIntExtra(ProfileProbeService.EXTRA_INDEX, -1),
                         delayMillis = intent.getIntExtra(ProfileProbeService.EXTRA_DELAY_MS, -1),
                     )
-                    ProfileProbeService.ACTION_FINISHED -> viewModel.finishProfileProbes()
+                    ProfileProbeService.ACTION_FINISHED -> viewModel.finishProfileProbes(
+                        intent.getStringExtra(ProfileProbeService.EXTRA_REQUEST_ID).orEmpty(),
+                    )
                 }
             }
         }

@@ -22,6 +22,7 @@ import com.warpy.app.model.VpnStatus
 import com.warpy.app.model.VpnProfile
 import com.warpy.app.vpn.SingBoxConfigBuilder
 import com.warpy.app.vpn.ProfileProbeService
+import com.warpy.app.vpn.ProfileProbeRequest
 import com.warpy.app.vpn.VpnCommandCoordinator
 import com.warpy.app.vpn.VpnLaunchResult
 import com.warpy.app.updates.AndroidRelease
@@ -107,9 +108,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingRelease: AndroidRelease? = null
     private var lastAutomaticUpdateCheckAt = 0L
     private var updateCheckInFlight = false
-    private var profileProbeInFlight = false
+    private var profileProbeRequest: ProfileProbeRequest? = null
+    private var profileProbeJob: kotlinx.coroutines.Job? = null
     private var profileProbeCheckedAt = 0L
-    private var profileProbeSignature = ""
+    private var profileProbeProfiles: List<VpnProfile> = emptyList()
 
     init {
         handler.post { regenerateConfig() }
@@ -216,31 +218,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val current = _state.value
         val profiles = current.settings.profiles
         val requested = indices.filter { it in profiles.indices }.distinct()
-        if (requested.isEmpty() || profileProbeInFlight) return
-        val signature = profiles.joinToString("\u0000") { "${it.protocol}:${it.server}:${it.port}:${it.name}" }
-        val fresh = signature == profileProbeSignature &&
+        if (requested.isEmpty() || profileProbeRequest != null) return
+        val fresh = profiles == profileProbeProfiles &&
             SystemClock.elapsedRealtime() - profileProbeCheckedAt < PROFILE_PROBE_TTL_MS &&
             requested.all { index ->
                 current.profileProbes[index]?.status?.let { it != ProfileProbeStatus.Checking } == true
             }
         if (!force && fresh) return
 
-        profileProbeInFlight = true
-        profileProbeSignature = signature
+        val request = ProfileProbeRequest(profiles.toList(), requested)
+        profileProbeRequest = request
+        profileProbeProfiles = profiles.toList()
         _state.value = current.copy(
             profileProbes = current.profileProbes + requested.associateWith {
                 ProfileProbeResult(ProfileProbeStatus.Checking)
             },
         )
-        getApplication<Application>().startService(
-            Intent(getApplication(), ProfileProbeService::class.java)
-                .setAction(ProfileProbeService.ACTION_PROBE)
-                .putExtra(ProfileProbeService.EXTRA_INDICES, requested.toIntArray()),
-        )
+        profileProbeJob = viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { request.writeSnapshot(getApplication<Application>().cacheDir) }
+                if (profileProbeRequest?.id != request.id) return@launch
+                getApplication<Application>().startService(
+                    Intent(getApplication(), ProfileProbeService::class.java)
+                        .setAction(ProfileProbeService.ACTION_PROBE)
+                        .putExtra(ProfileProbeService.EXTRA_REQUEST_ID, request.id)
+                        .putExtra(ProfileProbeService.EXTRA_INDICES, requested.toIntArray()),
+                )
+                delay(10_000L + ((requested.size + 3) / 4) * 8_000L)
+                cancelProfileProbes()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                finishProfileProbes(request.id)
+            } finally {
+                request.deleteSnapshot(getApplication<Application>().cacheDir)
+            }
+        }
     }
 
-    fun applyProfileProbeResult(index: Int, delayMillis: Int) {
-        if (index !in _state.value.settings.profiles.indices) return
+    fun applyProfileProbeResult(requestId: String, index: Int, delayMillis: Int) {
+        if (profileProbeRequest?.accepts(requestId, index, _state.value.settings.profiles) != true) return
         val result = if (delayMillis > 0) {
             ProfileProbeResult(ProfileProbeStatus.Available, delayMillis)
         } else {
@@ -249,8 +266,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(profileProbes = _state.value.profileProbes + (index to result))
     }
 
-    fun finishProfileProbes() {
-        profileProbeInFlight = false
+    fun finishProfileProbes(requestId: String) {
+        if (profileProbeRequest?.id != requestId) return
+        profileProbeRequest = null
+        profileProbeJob?.cancel()
+        profileProbeJob = null
         profileProbeCheckedAt = SystemClock.elapsedRealtime()
         _state.value = _state.value.copy(
             profileProbes = _state.value.profileProbes.mapValues { (_, result) ->
@@ -264,11 +284,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun cancelProfileProbes() {
-        if (!profileProbeInFlight) return
+        val request = profileProbeRequest ?: return
+        finishProfileProbes(request.id)
         getApplication<Application>().stopService(
             Intent(getApplication(), ProfileProbeService::class.java),
         )
-        finishProfileProbes()
     }
 
     fun canInstallUpdates(): Boolean = updater.canRequestPackageInstalls()
@@ -769,13 +789,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             fail("Не удалось сохранить настройки")
             return false
         }
+        if (profilesChanged) cancelProfileProbes()
         _state.value = _state.value.copy(
             settings = normalizedSettings,
             profileProbes = if (profilesChanged) emptyMap() else _state.value.profileProbes,
         )
         if (profilesChanged) {
             profileProbeCheckedAt = 0L
-            profileProbeSignature = ""
+            profileProbeProfiles = emptyList()
         }
         return true
     }
@@ -1073,6 +1094,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         cleared = true
+        cancelProfileProbes()
         vpnCommands.close()
         speedTestJob?.cancel()
         speedTestJob = null

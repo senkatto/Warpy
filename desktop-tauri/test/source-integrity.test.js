@@ -259,11 +259,11 @@ test('sleep, unlock and network changes use one bounded service recovery path', 
   assert.notEqual(recoveryStart, -1);
   assert.notEqual(recoveryEnd, -1);
   const connectivityRecovery = engine.slice(recoveryStart, recoveryEnd);
-  assert.match(connectivityRecovery, /verify_tunnel\(\)\.is_ok\(\)/);
+  assert.match(connectivityRecovery, /self\.verify_tunnel\(false\)\.is_ok\(\)/);
   assert.match(connectivityRecovery, /self\.request_recovery\(\)/);
   assert.ok(
     connectivityRecovery.indexOf('self.lifecycle.lock()')
-      < connectivityRecovery.indexOf('verify_tunnel().is_ok()'),
+      < connectivityRecovery.indexOf('self.verify_tunnel(false).is_ok()'),
   );
 });
 

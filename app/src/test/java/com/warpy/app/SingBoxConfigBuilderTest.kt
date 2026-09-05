@@ -476,7 +476,7 @@ class SingBoxConfigBuilderTest {
     }
 
     @Test
-    fun `russian domains bypass the tunnel and use local dns`() {
+    fun `russian domains follow user routing without implicit bypass`() {
         for (protocol in listOf(Protocol.Vless, Protocol.Hysteria2)) {
             val currentProfile = profile.copy(
                 protocol = protocol,
@@ -492,30 +492,43 @@ class SingBoxConfigBuilderTest {
                     filesDir = "/tmp",
                 ),
             )
-            val expected = setOf(".ru", ".xn--p1ai", ".su", "ozonusercontent.com")
             val dnsRules = root.getJSONObject("dns").getJSONArray("rules")
-            val localDnsRule = (0 until dnsRules.length())
+            val localDnsRules = (0 until dnsRules.length())
                 .map(dnsRules::getJSONObject)
-                .single { it.optString("server") == "local" }
-            val dnsSuffixes = localDnsRule.getJSONArray("domain_suffix")
-            val dnsValues = (0 until dnsSuffixes.length()).map(dnsSuffixes::getString).toSet()
+                .filter { it.optString("server") == "local" }
 
             val routeRules = root.getJSONObject("route").getJSONArray("rules")
             val rules = (0 until routeRules.length()).map(routeRules::getJSONObject)
             val directIndex = rules.indexOfFirst {
                 it.optString("outbound") == "direct" && it.has("domain_suffix")
             }
-            val quicIndex = rules.indexOfFirst {
-                it.optString("network") == "udp" && it.optInt("port") == 443
+            assertTrue(localDnsRules.isEmpty())
+            assertEquals(-1, directIndex)
+            assertEquals("proxy", root.getJSONObject("route").getString("final"))
+            for (mode in listOf(AppTunnelMode.Include, AppTunnelMode.Exclude)) {
+                val split = JSONObject(SingBoxConfigBuilder.build(AppSettings(
+                    profiles = listOf(currentProfile), siteTunnelMode = mode, tunneledSites = setOf("example.ru"),
+                ))).getJSONObject("route").getJSONArray("rules")
+                val matching = (0 until split.length()).map(split::getJSONObject).filter {
+                    it.optJSONArray("domain_suffix")?.toString()?.contains("example.ru") == true
+                }
+                assertEquals(1, matching.size)
+                assertEquals(if (mode == AppTunnelMode.Include) "proxy" else "direct", matching.single().getString("outbound"))
             }
-            val adIndex = rules.indexOfFirst { it.optString("outbound") == "block" && it.has("rule_set") }
-            val routeSuffixes = rules[directIndex].getJSONArray("domain_suffix")
-            val routeValues = (0 until routeSuffixes.length()).map(routeSuffixes::getString).toSet()
+        }
+    }
 
-            assertEquals(expected, dnsValues)
-            assertEquals(expected, routeValues)
-            assertTrue(adIndex in 0 until directIndex)
-            assertTrue(quicIndex > directIndex)
+    @Test
+    fun `health proxy never follows site exclusions or direct fallback`() {
+        for (mode in listOf(AppTunnelMode.Include, AppTunnelMode.Exclude)) {
+            val root = JSONObject(SingBoxConfigBuilder.build(
+                AppSettings(profiles = listOf(profile), siteTunnelMode = mode,
+                    tunneledSites = setOf("example.ru", "gstatic.com", "cloudflare.com")),
+                localProxy = LocalProxyConfig(45678, "user", "password"),
+            ))
+            val firstRule = root.getJSONObject("route").getJSONArray("rules").getJSONObject(0)
+            assertEquals("health-proxy-in", firstRule.getJSONArray("inbound").getString(0))
+            assertEquals("proxy", firstRule.getString("outbound"))
         }
     }
 

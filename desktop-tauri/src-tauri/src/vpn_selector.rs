@@ -375,7 +375,7 @@ fn send_request(
     })
 }
 
-fn random_secret() -> Result<String, String> {
+pub(crate) fn random_secret() -> Result<String, String> {
     let mut bytes = [0_u8; 32];
     let status = unsafe {
         BCryptGenRandom(

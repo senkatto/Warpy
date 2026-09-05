@@ -470,6 +470,14 @@ internal class VpnSessionReducer(
         available: Boolean,
     ): VpnSessionReduction {
         if (!snapshot.shouldRun) return VpnSessionReduction(snapshot)
+        // A network event cancels the resource transaction as well as validation.
+        // If startup has not completed, rebuild the core instead of probing a
+        // tunnel that the cancelled transaction may already have closed.
+        if (available && snapshot.runtimeProfileTag == null) {
+            val profileTag = snapshot.preferredProfileTag
+                ?: return VpnSessionReduction(snapshot)
+            return start(snapshot, profileTag, recovering = true)
+        }
         val previousGeneration = snapshot.generation
         val generation = previousGeneration + 1L
         return if (available) {

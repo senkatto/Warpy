@@ -512,7 +512,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             registerStabilityWatchersInternal()
             ensureCoreResourceTransactionOpen()
 
-            val startedCore = startCommandServer(settings)
+            val startedCore = startCommandServer(settings.copy(activeProfileIndex = requestedIndex))
             currentCoroutineContext().ensureActive()
             ensureCoreResourceTransactionOpen()
             saveLastConfig(startedCore.config)
@@ -778,6 +778,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private suspend fun handlePhysicalNetworkChanged(state: PhysicalNetworkState?) {
         if (vpnState != VpnState.Connected &&
+            vpnState != VpnState.Starting &&
             vpnState != VpnState.Recovering &&
             vpnState != VpnState.Validating
         ) return

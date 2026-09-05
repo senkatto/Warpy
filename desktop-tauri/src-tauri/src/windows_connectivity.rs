@@ -18,7 +18,7 @@ const NETWORK_SETTLE_DELAY: Duration = Duration::from_secs(2);
 const RESUME_SETTLE_DELAY: Duration = Duration::from_secs(3);
 const UNLOCK_SETTLE_DELAY: Duration = Duration::from_millis(750);
 const MAX_SETTLE_DELAY: Duration = Duration::from_secs(5);
-const IDLE_WAIT: Duration = Duration::from_secs(1);
+const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 const TRIGGER_NETWORK: u8 = 1;
 const TRIGGER_RESUME: u8 = 2;
@@ -61,17 +61,30 @@ impl ConnectivityTrigger {
             "resume"
         } else if self.0 & TRIGGER_UNLOCK != 0 {
             "unlock"
-        } else {
+        } else if self.0 & TRIGGER_NETWORK != 0 {
             "network-change"
+        } else {
+            "periodic"
         }
     }
 }
 
-#[derive(Default)]
 pub(crate) struct ConnectivitySchedule {
     first_event_at: Option<Instant>,
     due_at: Option<Instant>,
     trigger_mask: u8,
+    health_due_at: Instant,
+}
+
+impl Default for ConnectivitySchedule {
+    fn default() -> Self {
+        Self {
+            first_event_at: None,
+            due_at: None,
+            trigger_mask: 0,
+            health_due_at: Instant::now() + HEALTH_CHECK_INTERVAL,
+        }
+    }
 }
 
 impl ConnectivitySchedule {
@@ -92,16 +105,19 @@ impl ConnectivitySchedule {
 
     pub(crate) fn wait_duration(&self, now: Instant) -> Duration {
         self.due_at
-            .map(|due_at| due_at.saturating_duration_since(now))
-            .unwrap_or(IDLE_WAIT)
+            .unwrap_or(self.health_due_at)
+            .saturating_duration_since(now)
     }
 
     pub(crate) fn take_due(&mut self, now: Instant) -> Option<ConnectivityTrigger> {
-        if self.due_at.is_none_or(|due_at| now < due_at) {
+        if now < self.due_at.unwrap_or(self.health_due_at) {
             return None;
         }
         let trigger = ConnectivityTrigger(self.trigger_mask);
-        *self = Self::default();
+        self.first_event_at = None;
+        self.due_at = None;
+        self.trigger_mask = 0;
+        self.health_due_at = now + HEALTH_CHECK_INTERVAL;
         Some(trigger)
     }
 }
@@ -215,5 +231,30 @@ mod tests {
                 .label(),
             "network-change"
         );
+    }
+
+    #[test]
+    fn silent_tunnel_failure_can_be_detected_without_network_events() {
+        let mut schedule = ConnectivitySchedule::default();
+        let due = schedule.health_due_at;
+        assert!(schedule.take_due(due - Duration::from_millis(1)).is_none());
+        assert_eq!(schedule.take_due(due).unwrap().label(), "periodic");
+        assert!(schedule.take_due(due).is_none());
+        assert_eq!(schedule.wait_duration(due), Duration::from_secs(30));
+        assert_eq!(
+            schedule.take_due(due + Duration::from_secs(30)).unwrap().label(),
+            "periodic"
+        );
+    }
+
+    #[test]
+    fn network_settle_takes_priority_and_resets_periodic_check() {
+        let mut schedule = ConnectivitySchedule::default();
+        let due = schedule.health_due_at;
+        schedule.push(ConnectivityEvent::Resume, due - Duration::from_secs(1));
+        assert!(schedule.take_due(due).is_none());
+        let settled = due + Duration::from_secs(2);
+        assert_eq!(schedule.take_due(settled).unwrap().label(), "resume");
+        assert_eq!(schedule.wait_duration(settled), Duration::from_secs(30));
     }
 }

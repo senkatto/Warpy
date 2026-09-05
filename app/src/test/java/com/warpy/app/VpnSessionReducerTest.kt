@@ -382,6 +382,59 @@ class VpnSessionReducerTest {
         )
     }
 
+    @Test
+    fun `network arriving during startup replaces the cancelled core transaction`() {
+        val starting = reducer.reduce(
+            VpnSessionSnapshot(),
+            VpnSessionEvent.StartRequested("profile_1"),
+        ).snapshot
+        val replacement = reducer.reduce(starting, VpnSessionEvent.UpstreamChanged(true))
+
+        assertEquals(VpnState.Recovering, replacement.snapshot.state)
+        assertEquals(
+            listOf(
+                VpnSessionEffect.CancelOperations(starting.generation),
+                VpnSessionEffect.StopCore(starting.generation),
+                VpnSessionEffect.StartCore(starting.generation + 1L, "profile_1"),
+            ),
+            replacement.effects,
+        )
+        val stale = reducer.reduce(
+            replacement.snapshot,
+            VpnSessionEvent.CoreStarted(starting.generation),
+        )
+        assertEquals(replacement.snapshot, stale.snapshot)
+        assertTrue(stale.effects.isEmpty())
+    }
+
+    @Test
+    fun `network returning during recovery restarts before validating`() {
+        val connected = connectedSession("profile_0")
+        val restart = reducer.reduce(
+            connected,
+            VpnSessionEvent.CoreDied(connected.generation, "core stopped"),
+        ).snapshot
+        val lost = reducer.reduce(restart, VpnSessionEvent.UpstreamChanged(false)).snapshot
+        val returned = reducer.reduce(lost, VpnSessionEvent.UpstreamChanged(true))
+
+        assertEquals(null, returned.snapshot.runtimeProfileTag)
+        assertTrue(returned.effects.any { it is VpnSessionEffect.StartCore })
+        assertFalse(returned.effects.any { it is VpnSessionEffect.ValidateTunnel })
+        val started = reducer.reduce(
+            returned.snapshot,
+            VpnSessionEvent.CoreStarted(returned.snapshot.generation),
+        )
+        val established = reducer.reduce(
+            started.snapshot,
+            VpnSessionEvent.TunnelEstablished(started.snapshot.generation),
+        )
+        assertEquals(VpnState.Validating, established.snapshot.state)
+        assertEquals(
+            VpnSessionEffect.ValidateTunnel(established.snapshot.generation, ValidationReason.Recovery),
+            established.effects.single(),
+        )
+    }
+
     private fun validatingSession(profileTag: String): VpnSessionSnapshot {
         val started = reducer.reduce(
             VpnSessionSnapshot(),

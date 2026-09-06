@@ -673,6 +673,9 @@ function cleanProcessNames(names) {
 
 export function buildSingBoxConfig(inputProfile, settings = {}) {
   const profile = normalizeProfile(inputProfile);
+  // Preserve Flow hostnames across TUN, including QUIC and connections without
+  // a sniffable ClientHello. Shared Google IPs cannot identify the right exit.
+  const flowDomains = ['flow.google.com', 'labs.google', 'aisandbox-pa.googleapis.com'];
 
   const serverIsIp = isIpAddress(profile.host);
   const dnsRules = [];
@@ -698,11 +701,16 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
   } else if (settings.sitesMode === 'only' && sites.length) {
     dnsRules.unshift({ domain_suffix: sites, action: 'route', server: TAGS.remoteDns });
   }
+  dnsRules.push(
+    { domain: flowDomains, query_type: ['A', 'AAAA'], action: 'route', server: 'flow-dns' },
+    { domain: flowDomains, query_type: ['HTTPS'], action: 'predefined', rcode: 'NOERROR' },
+  );
 
   const config = {
     log: { level: 'warn', timestamp: true },
     dns: {
       servers: [
+        { type: 'fakeip', tag: 'flow-dns', inet4_range: '198.18.0.0/15' },
         {
           type: 'https',
           tag: TAGS.remoteDns,

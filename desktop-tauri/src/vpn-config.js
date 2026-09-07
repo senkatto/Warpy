@@ -667,6 +667,28 @@ function cleanDomains(domains) {
     .filter(Boolean))];
 }
 
+const PROTECTED_FLOW_DOMAINS = [
+  'labs.google',
+  'flow.google',
+  'flow.google.com',
+  'flowmusic.google',
+  'flowmusic.app',
+  'deepmind.google',
+  'deepmind.com',
+  'gemini.google.com',
+  'aistudio.google.com',
+  'aisandbox-pa.googleapis.com',
+  'accounts.google.com',
+  'drive.google.com',
+];
+
+function isProtectedVpnDomain(domain) {
+  const normalized = String(domain || '').trim().toLowerCase().replace(/^\.+/, '');
+  if (!normalized) return false;
+  if (normalized === 'google.com') return true;
+  return PROTECTED_FLOW_DOMAINS.some(p => normalized === p || normalized.endsWith('.' + p));
+}
+
 function cleanProcessNames(names) {
   return [...new Set((names || []).map(value => String(value).trim()).filter(Boolean))];
 }
@@ -675,7 +697,36 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
   const profile = normalizeProfile(inputProfile);
   // Preserve Flow hostnames across TUN, including QUIC and connections without
   // a sniffable ClientHello. Shared Google IPs cannot identify the right exit.
-  const flowDomains = ['flow.google.com', 'labs.google', 'aisandbox-pa.googleapis.com'];
+  const flowDomains = [
+    'labs.google',
+    'flow.google',
+    'flow.google.com',
+    'flowmusic.google',
+    'flowmusic.app',
+    'deepmind.google',
+    'deepmind.com',
+    'accounts.google.com',
+    'apis.google.com',
+    'myaccount.google.com',
+    'clients6.google.com',
+    'client-channel.google.com',
+    'gemini.google.com',
+    'aistudio.google.com',
+    'antigravity.google',
+    'antigravity.google.com',
+    'aisandbox-pa.googleapis.com',
+  ];
+  const flowDomainSuffixes = [
+    'google.com',
+    'google',
+    'google.dev',
+    'googleapis.com',
+    'googleusercontent.com',
+    'gstatic.com',
+    'appspot.com',
+    'withgoogle.com',
+    '1e100.net',
+  ];
 
   const serverIsIp = isIpAddress(profile.host);
   const dnsRules = [];
@@ -695,15 +746,31 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
     });
   }
 
-  const sites = cleanDomains(settings.sitesList);
+  const rawSites = cleanDomains(settings.sitesList);
+  const sites = settings.sitesMode === 'bypass'
+    ? rawSites.filter(d => !isProtectedVpnDomain(d))
+    : rawSites;
+
   if (settings.sitesMode === 'bypass' && sites.length) {
     dnsRules.unshift({ domain_suffix: sites, action: 'route', server: TAGS.localDns });
   } else if (settings.sitesMode === 'only' && sites.length) {
     dnsRules.unshift({ domain_suffix: sites, action: 'route', server: TAGS.remoteDns });
   }
   dnsRules.push(
-    { domain: flowDomains, query_type: ['A', 'AAAA'], action: 'route', server: 'flow-dns' },
-    { domain: flowDomains, query_type: ['HTTPS'], action: 'predefined', rcode: 'NOERROR' },
+    {
+      domain: flowDomains,
+      domain_suffix: flowDomainSuffixes,
+      query_type: ['A', 'AAAA'],
+      action: 'route',
+      server: 'flow-dns',
+    },
+    {
+      domain: flowDomains,
+      domain_suffix: flowDomainSuffixes,
+      query_type: ['HTTPS'],
+      action: 'predefined',
+      rcode: 'NOERROR',
+    },
   );
 
   const config = {

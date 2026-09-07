@@ -605,3 +605,55 @@ test('bundled sing-box accepts generated configs without deprecated modes', { sk
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('Flow DNS rule covers required Google AI domains and excludes YouTube', () => {
+  const profile = parseProfileLink('vless://00000000-0000-4000-8000-000000000000@example.com:443?security=reality&sni=www.apple.com&pbk=pk&sid=01&type=tcp#VLESS');
+  const config = buildSingBoxConfig(profile);
+  const fakeServer = config.dns.servers.find(s => s.tag === 'flow-dns');
+  assert.ok(fakeServer, 'flow-dns fakeip server must be defined');
+  assert.equal(fakeServer.type, 'fakeip');
+
+  const flowDnsRule = config.dns.rules.find(r => r.server === 'flow-dns');
+  assert.ok(flowDnsRule, 'flow-dns route rule must be defined');
+  assert.ok(flowDnsRule.domain_suffix.includes('google.com'));
+  assert.ok(flowDnsRule.domain_suffix.includes('google'));
+  assert.ok(flowDnsRule.domain_suffix.includes('google.dev'));
+  assert.ok(flowDnsRule.domain_suffix.includes('googleapis.com'));
+  assert.ok(flowDnsRule.domain_suffix.includes('gstatic.com'));
+  assert.ok(flowDnsRule.domain_suffix.includes('googleusercontent.com'));
+  assert.ok(flowDnsRule.domain_suffix.includes('1e100.net'));
+
+  // Ensure YouTube is never captured by the Flow synthetic DNS rule
+  const allFlowPatterns = [...(flowDnsRule.domain || []), ...(flowDnsRule.domain_suffix || [])];
+  assert.equal(allFlowPatterns.includes('youtube.com'), false);
+  assert.equal(allFlowPatterns.includes('googlevideo.com'), false);
+  assert.equal(allFlowPatterns.includes('ytimg.com'), false);
+});
+
+test('Flow and Google AI domains cannot be bypassed in bypass mode', () => {
+  const profile = parseProfileLink('hysteria2://secret@203.0.113.10:443#HY2');
+  const config = buildSingBoxConfig(profile, {
+    sitesMode: 'bypass',
+    sitesList: [
+      'drive.google.com',
+      'labs.google',
+      'flow.google',
+      'google.com',
+      'gemini.google.com',
+      'browserleaks.com',
+    ],
+  });
+
+  const directSiteRules = config.route.rules.filter(
+    rule => rule.outbound === 'direct' && Array.isArray(rule.domain_suffix),
+  );
+  const bypassedDomains = directSiteRules.flatMap(r => r.domain_suffix);
+
+  assert.ok(bypassedDomains.includes('browserleaks.com'));
+  assert.equal(bypassedDomains.includes('drive.google.com'), false);
+  assert.equal(bypassedDomains.includes('labs.google'), false);
+  assert.equal(bypassedDomains.includes('flow.google'), false);
+  assert.equal(bypassedDomains.includes('google.com'), false);
+  assert.equal(bypassedDomains.includes('gemini.google.com'), false);
+});
+

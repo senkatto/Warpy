@@ -396,7 +396,7 @@ test('keeps www host exclusions scoped away from sibling Google services', () =>
   assert.equal(siteRule.domain_suffix.includes('gemini.google.com'), false);
 });
 
-test('does not force Russian domains outside VLESS and Hysteria2 tunnels', () => {
+test('Russian domains use the local direct exit for VLESS and Hysteria2', () => {
   const profiles = [
     parseProfileLink(
       'vless://00000000-0000-4000-8000-000000000000@example.com:443'
@@ -407,36 +407,35 @@ test('does not force Russian domains outside VLESS and Hysteria2 tunnels', () =>
 
   for (const profile of profiles) {
     const config = buildSingBoxConfig(profile, { adblock: true, quic: true });
-    const expected = ['.ru', '.xn--p1ai', '.su', 'ozonusercontent.com'];
+    const expected = ['ru', 'xn--p1ai', 'su'];
     const directIndex = config.route.rules.findIndex(
       rule => rule.outbound === 'direct' && expected.every(suffix => rule.domain_suffix?.includes(suffix)),
     );
     const dnsRule = config.dns.rules.find(
-      rule => rule.server === 'local-dns' && expected.every(suffix => rule.domain_suffix?.includes(suffix)),
+      rule => rule.server === 'flow-dns' && expected.every(suffix => rule.domain_suffix?.includes(suffix)),
     );
 
-    assert.equal(directIndex, -1);
-    assert.equal(dnsRule, undefined);
+    assert.ok(directIndex >= 0);
+    assert.ok(dnsRule);
     assert.equal(config.route.final, 'proxy');
     for (const mode of ['only', 'bypass']) {
       const split = buildSingBoxConfig(profile, {sitesMode: mode, sitesList: ['example.ru']});
       const matching = split.route.rules.filter(rule => rule.domain_suffix?.some(
         suffix => 'example.ru' === suffix || 'example.ru'.endsWith(suffix.startsWith('.') ? suffix : `.${suffix}`),
       ));
-      assert.equal(matching.length, 1);
-      assert.equal(matching[0].outbound, mode === 'only' ? 'proxy' : 'direct');
+      assert.equal(matching[0].outbound, 'direct');
     }
   }
 });
 
-test('default routing does not suppress the Windows kill switch', () => {
+test('Russian bypass does not change the default VPN route or add application bypasses', () => {
   const profile = parseProfileLink('hysteria2://secret@203.0.113.10:443#HY2');
   const {config} = buildRuntimeSingBoxConfig([profile], 0, {
     killSwitch: true, lan: false, appsMode: 'off', sitesMode: 'off',
   });
   assert.equal(config.route.final, 'proxy');
-  assert.equal(config.route.rules.some(rule => rule.action === 'route' && rule.outbound === 'direct'
-    && (rule.process_name || rule.domain_suffix || rule.ip_is_private)), false);
+  assert.ok(config.route.rules.some(rule => rule.outbound === 'direct' && rule.domain_suffix?.includes('ru')));
+  assert.equal(config.route.rules.some(rule => rule.outbound === 'direct' && rule.process_name), false);
 });
 
 test('uses TUN DNS hijacking without a loopback DNS listener', () => {

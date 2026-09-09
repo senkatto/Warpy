@@ -693,6 +693,8 @@ function cleanProcessNames(names) {
   return [...new Set((names || []).map(value => String(value).trim()).filter(Boolean))];
 }
 
+const DIRECT_RUSSIAN_SUFFIXES = ['ru', 'xn--p1ai', 'su'];
+
 export function buildSingBoxConfig(inputProfile, settings = {}) {
   const profile = normalizeProfile(inputProfile);
   // Preserve Flow hostnames across TUN, including QUIC and connections without
@@ -771,6 +773,9 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
       action: 'predefined',
       rcode: 'NOERROR',
     },
+    // Keep the hostname available for local routing even without TLS sniffing.
+    { domain_suffix: DIRECT_RUSSIAN_SUFFIXES, query_type: ['A', 'AAAA'], action: 'route', server: 'flow-dns' },
+    { domain_suffix: DIRECT_RUSSIAN_SUFFIXES, query_type: ['HTTPS'], action: 'predefined', rcode: 'NOERROR' },
   );
 
   const config = {
@@ -868,6 +873,7 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
     rules.push({ domain_suffix: AD_DOMAINS, action: 'reject' });
   }
   if (settings.lan) rules.push({ ip_is_private: true, action: 'route', outbound: TAGS.direct });
+  rules.push({ domain_suffix: DIRECT_RUSSIAN_SUFFIXES, action: 'route', outbound: TAGS.direct });
 
   const apps = cleanProcessNames(settings.appsList);
   if (apps.length && settings.appsMode === 'bypass') {

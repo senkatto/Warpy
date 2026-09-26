@@ -36,73 +36,73 @@ internal class DefaultNetworkMonitor(
     private var activeState: PhysicalNetworkState? = null
     private val candidates = linkedMapOf<Network, Candidate>()
     private var preferredNetwork: Network? = null
+    private var started = false
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) {
+        override fun onAvailable(network: Network) = updateCandidates {
             Log.i(TAG, "Physical network available: $network")
             candidates.getOrPut(network, ::Candidate).apply {
                 capabilities = connectivity.getNetworkCapabilities(network)
                 linkProperties = connectivity.getLinkProperties(network)
             }
-            publishBestNetwork()
         }
 
         override fun onCapabilitiesChanged(
             network: Network,
             capabilities: NetworkCapabilities,
-        ) {
+        ) = updateCandidates {
             candidates.getOrPut(network, ::Candidate).capabilities = capabilities
-            publishBestNetwork()
         }
 
         override fun onLinkPropertiesChanged(
             network: Network,
             properties: LinkProperties,
-        ) {
+        ) = updateCandidates {
             candidates.getOrPut(network, ::Candidate).linkProperties = properties
-            publishBestNetwork()
         }
 
-        override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+        override fun onBlockedStatusChanged(network: Network, blocked: Boolean) = updateCandidates {
             candidates.getOrPut(network, ::Candidate).blocked = blocked
-            publishBestNetwork()
         }
 
-        override fun onLost(network: Network) {
+        override fun onLost(network: Network) = updateCandidates {
             Log.i(TAG, "Physical network lost: $network")
             candidates.remove(network)
-            publishBestNetwork()
         }
     }
 
     private val preferredCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) {
+        override fun onAvailable(network: Network) = updateCandidates {
             preferredNetwork = network
             candidates.getOrPut(network, ::Candidate).apply {
                 capabilities = connectivity.getNetworkCapabilities(network)
                 linkProperties = connectivity.getLinkProperties(network)
             }
-            publishBestNetwork()
         }
 
         override fun onCapabilitiesChanged(
             network: Network,
             capabilities: NetworkCapabilities,
-        ) {
+        ) = updateCandidates {
             candidates.getOrPut(network, ::Candidate).capabilities = capabilities
-            publishBestNetwork()
         }
 
         override fun onLinkPropertiesChanged(
             network: Network,
             properties: LinkProperties,
-        ) {
+        ) = updateCandidates {
             candidates.getOrPut(network, ::Candidate).linkProperties = properties
-            publishBestNetwork()
         }
 
-        override fun onLost(network: Network) {
+        override fun onLost(network: Network) = updateCandidates {
             if (preferredNetwork == network) preferredNetwork = null
+        }
+    }
+
+    private inline fun updateCandidates(update: () -> Unit) {
+        synchronized(this) {
+            if (!started) return
+            update()
             publishBestNetwork()
         }
     }
@@ -154,7 +154,10 @@ internal class DefaultNetworkMonitor(
         onNetworkChanged(nextState)
     }
 
+    @Synchronized
     override fun start() {
+        if (started) return
+        started = true
         runCatching {
             val request = NetworkRequest.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -176,12 +179,17 @@ internal class DefaultNetworkMonitor(
             }
         }.onFailure {
             Log.e(TAG, "Failed to register physical network callback", it)
+            stop()
+            throw it
         }
     }
 
     override fun currentState(): PhysicalNetworkState? = activeState
 
+    @Synchronized
     override fun stop() {
+        if (!started) return
+        started = false
         runCatching {
             connectivity.unregisterNetworkCallback(callback)
         }.onFailure {

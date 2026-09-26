@@ -7,13 +7,30 @@ import com.warpy.app.vpn.session.VpnSessionEvent
 import com.warpy.app.vpn.session.VpnSessionReducer
 import com.warpy.app.vpn.session.VpnSessionSnapshot
 import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class VpnSessionControllerTest {
+    @Test
+    fun `closing controller cancels queued dispatch without leaving it suspended`() = runBlocking {
+        val controller = newController(this)
+        val pending = async(start = CoroutineStart.UNDISPATCHED) {
+            controller.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+        }
+        controller.close()
+        try {
+            withTimeout(1_000) { pending.join() }
+            assertTrue(pending.isCancelled)
+        } finally {
+            pending.cancel()
+        }
+    }
+
     @Test
     fun `concurrent intents are reduced into one ordered generation stream`() = runBlocking {
         val controller = newController(this)

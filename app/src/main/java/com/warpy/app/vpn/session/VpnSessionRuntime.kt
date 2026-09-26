@@ -1,6 +1,7 @@
 package com.warpy.app.vpn.session
 
 import com.warpy.app.model.VpnState
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -160,6 +161,7 @@ internal class VpnSessionRuntime(
                 SessionValidationResult(
                     succeeded = false,
                     message = error.message ?: "VPN validation failed",
+                    recoverable = error is IOException,
                 )
             }
             if (!isCurrent(effect.generation)) return@launch
@@ -233,7 +235,7 @@ internal class VpnSessionRuntime(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
-                ConnectionRecoveryResult.Deferred(
+                ConnectionRecoveryResult.Exhausted(
                     error.message ?: "VPN recovery failed",
                 )
             }

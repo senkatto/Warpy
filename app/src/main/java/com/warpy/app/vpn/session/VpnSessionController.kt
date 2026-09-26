@@ -40,16 +40,20 @@ internal class VpnSessionController(
         }
     }
 
+    init {
+        actor.invokeOnCompletion { events.cancel() }
+    }
+
     fun snapshot(): VpnSessionSnapshot = currentSnapshot
 
     suspend fun dispatch(event: VpnSessionEvent): VpnSessionReduction {
-        val result = CompletableDeferred<VpnSessionReduction>()
+        val result = CompletableDeferred<VpnSessionReduction>(actor)
         events.send(PendingEvent(event, result))
         return result.await()
     }
 
     fun close() {
-        events.close()
+        events.cancel()
         actor.cancel()
     }
 }

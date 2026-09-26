@@ -580,7 +580,7 @@ private fun WarpyApp(viewModel: MainViewModel = viewModel()) {
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(top = 96.dp, bottom = 100.dp),
-                        status = state.diagnostics.status,
+                        status = if (state.vpnStartPending) VpnStatus.Connecting else state.diagnostics.status,
                         profile = displayedProfile,
                         pingText = state.diagnostics.pingText,
                         speedText = state.diagnostics.speedText,
@@ -589,7 +589,8 @@ private fun WarpyApp(viewModel: MainViewModel = viewModel()) {
                         commandError = state.commandError,
                         connectionAttemptId = connectionAttemptId,
                         onToggle = {
-                            val vpnIsRunning = state.diagnostics.status == VpnStatus.Connected ||
+                            val vpnIsRunning = state.vpnStartPending ||
+                                state.diagnostics.status == VpnStatus.Connected ||
                                 state.diagnostics.status == VpnStatus.Connecting ||
                                 WarpyService.shouldBeRunning(context)
                             if (vpnIsRunning) {

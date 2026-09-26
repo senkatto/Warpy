@@ -1054,7 +1054,11 @@ async function bindTrayCommands() {
 }
 
 async function handleTrayCommand(command) {
-  if (trayCommandRunning || !command || typeof command !== 'object') return;
+  if (!command || typeof command !== 'object') return;
+  if (trayCommandRunning) {
+    if (command.type === 'toggle' && S.commandPending !== 'stop') await stopVpn();
+    return;
+  }
   trayCommandRunning = true;
   try {
     if (command.type === 'toggle') {
@@ -2934,10 +2938,11 @@ function queueVpnOperation(operation) {
 }
 
 async function toggleVpn() {
-  if (!S.profiles.length) { show('overlay-add'); return; }
-  if (S.status === 'connected' || S.status === 'connecting' || S.status === 'error') {
+  if (S.commandPending === 'stop') return;
+  if (S.commandPending === 'start' || S.status === 'connected' || S.status === 'connecting' || S.status === 'error') {
     await stopVpn();
   } else {
+    if (!S.profiles.length) { show('overlay-add'); return; }
     await startVpn();
   }
 }
@@ -2969,12 +2974,16 @@ async function startVpnAfterSystemBoot() {
 }
 
 async function startVpn(options = {}) {
-  return queueVpnOperation(() => startVpnOperation(options));
+  const attempt = ++S.connectAttempt;
+  S.commandPending = 'start';
+  syncUI();
+  return queueVpnOperation(() => attempt === S.connectAttempt
+    ? startVpnOperation(options, attempt)
+    : false);
 }
 
-async function startVpnOperation({ reportFailure = true, preserveActiveProfile = false } = {}) {
+async function startVpnOperation({ reportFailure = true, preserveActiveProfile = false } = {}, attempt) {
   if (!preserveActiveProfile) restorePreferredProfileSelection();
-  const attempt = ++S.connectAttempt;
   S.startCommandAttempt = attempt;
   S.commandPending = 'start';
   S.commandError = '';
@@ -3032,13 +3041,13 @@ async function startVpnOperation({ reportFailure = true, preserveActiveProfile =
   } finally {
     if (S.startCommandAttempt === attempt) S.startCommandAttempt = 0;
     if (S.connectAttempt === attempt) S.startCommandDispatched = false;
-    if (S.commandPending === 'start') S.commandPending = null;
+    if (S.connectAttempt === attempt && S.commandPending === 'start') S.commandPending = null;
     syncUI();
   }
 }
 
 async function stopVpn() {
-  const wasConnecting = S.status === 'connecting';
+  const wasConnecting = S.commandPending === 'start' || S.startCommandDispatched || S.status === 'connecting';
   ++S.connectAttempt;
   S.startCommandAttempt = 0;
   S.commandPending = 'stop';
@@ -3046,7 +3055,7 @@ async function stopVpn() {
   syncUI();
   if (wasConnecting) {
     try {
-      if (S.startCommandDispatched) await invoke('cancel_vpn_start');
+      if (S.startCommandDispatched || S.status === 'connecting') await invoke('cancel_vpn_start');
       S.startCommandDispatched = false;
       return queueVpnOperation(stopVpnOperation);
     } catch (error) {

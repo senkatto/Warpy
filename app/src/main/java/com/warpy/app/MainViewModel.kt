@@ -50,6 +50,7 @@ import okhttp3.RequestBody
 import okio.BufferedSink
 
 data class MainUiState(
+    val vpnStartPending: Boolean = false,
     val settings: AppSettings = AppSettings(),
     val importText: String = "",
     val diagnostics: Diagnostics = Diagnostics(),
@@ -547,16 +548,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             forceRestart = forceRestart,
         )
         handleVpnLaunchResult(result)
+        if (result == VpnLaunchResult.Started) {
+            _state.value = _state.value.copy(vpnStartPending = true)
+        }
         return result
     }
 
     fun stopVpn() {
         vpnCommands.stop()
+        _state.value = _state.value.copy(vpnStartPending = false)
         clearCommandError()
     }
 
     fun applyServiceConnecting() {
         _state.value = _state.value.copy(
+            vpnStartPending = false,
             diagnostics = _state.value.diagnostics.copy(
                 status = VpnStatus.Connecting,
                 message = "Подключение...",
@@ -596,6 +602,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 connectedAtMillis = connectedAt,
                 runtimeProfileIndex = runtimeProfileIndex.takeIf { it in settings.profiles.indices },
             ),
+            vpnStartPending = false,
             commandError = if (settingsPersistenceFailed) {
                 "Не удалось сохранить выбранный профиль"
             } else {
@@ -607,6 +614,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun applyServiceStopped() {
         _state.value = _state.value.copy(
+            vpnStartPending = false,
             diagnostics = _state.value.diagnostics.copy(
                 status = VpnStatus.Idle,
                 message = "VPN выключен",
@@ -628,6 +636,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun applyServiceError(message: String) {
         _state.value = _state.value.copy(
+            vpnStartPending = false,
             diagnostics = _state.value.diagnostics.copy(
                 status = VpnStatus.Error,
                 message = message,

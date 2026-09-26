@@ -169,6 +169,7 @@ impl VpnEngine {
     }
 
     pub(crate) fn stop(&self) -> Result<(), String> {
+        self.cancel_start();
         let _lifecycle = self
             .lifecycle
             .lock()
@@ -178,7 +179,9 @@ impl VpnEngine {
         self.clear_selector_control();
         self.reset_recovery();
         self.set_state(EngineState::Stopping);
-        match self.stop_core() {
+        let result = self.stop_core();
+        self.start_cancelled.store(false, Ordering::Release);
+        match result {
             Ok(()) => {
                 self.disarm_kill_switch();
                 self.set_state(EngineState::Stopped);
@@ -197,6 +200,13 @@ impl VpnEngine {
         self.set_desired_config(None);
         self.set_desired_kill_switch(false);
         self.set_state(EngineState::Stopping);
+        // Startup probes can be blocked in native I/O. Closing their core makes
+        // them return immediately, without waiting for the lifecycle lock.
+        if let Ok(mut core) = self.core.lock() {
+            if let Some(core) = core.as_mut() {
+                let _ = core.child.kill();
+            }
+        }
     }
 
     pub(crate) fn start(
@@ -241,6 +251,11 @@ impl VpnEngine {
         );
         if let Err(error) = result {
             let cleanup_error = self.stop_core().err();
+            let error = if self.start_cancelled.load(Ordering::Acquire) {
+                START_CANCELLED.to_string()
+            } else {
+                error
+            };
             if error == START_CANCELLED {
                 self.start_cancelled.store(false, Ordering::Release);
             }
@@ -393,6 +408,13 @@ impl VpnEngine {
                 ))
             }
             Err(error) => {
+                let _ = self.stop_core();
+                if self.start_cancelled.load(Ordering::Acquire) {
+                    self.reset_recovery();
+                    self.disarm_kill_switch();
+                    self.set_state(EngineState::Stopped);
+                    return Some(START_CANCELLED.to_string());
+                }
                 self.clear_started_at();
                 if attempt >= MAX_RECOVERY_ATTEMPTS {
                     self.set_state(EngineState::Error);
@@ -517,15 +539,28 @@ impl VpnEngine {
             }
         };
 
+        {
+            let mut core = match self.core.lock() {
+                Ok(core) => core,
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("Состояние VPN недоступно".to_string());
+                }
+            };
+            *core = Some(ManagedCore {
+                child,
+                #[cfg(windows)]
+                _job: job,
+            });
+        }
         self.cancellable_start_delay(Duration::from_millis(350))?;
-        let initial_status = match child.try_wait() {
-            Ok(status) => status,
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error.to_string());
-            }
-        };
+        let initial_status = self.core.lock()
+            .map_err(|_| "Состояние VPN недоступно".to_string())?
+            .as_mut()
+            .ok_or_else(|| START_CANCELLED.to_string())?
+            .child.try_wait()
+            .map_err(|error| error.to_string())?;
         if let Some(status) = initial_status {
             let details = last_log_message(&tail_file(&log_path));
             return Err(if details.is_empty() {
@@ -537,46 +572,18 @@ impl VpnEngine {
         self.ensure_start_not_cancelled()?;
 
         #[cfg(windows)]
-        if let Err(error) = configure_tun_dns() {
-            let _ = child.kill();
-            let _ = child.wait();
-            cleanup_stale_tun_default_route();
-            return Err(error);
-        }
+        configure_tun_dns()?;
         self.ensure_start_not_cancelled()?;
 
         self.set_state(validation_state);
         let probe_result = self.verify_started_outbound(quick_probe);
-        if let Err(error) = probe_result {
-            let _ = child.kill();
-            let _ = child.wait();
-            #[cfg(windows)]
-            cleanup_stale_tun_default_route();
-            return Err(error);
-        }
+        probe_result?;
         self.ensure_start_not_cancelled()?;
 
         if kill_switch {
-            if let Err(error) = self.arm_kill_switch(&paths.core, config, preserve_kill_switch) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error);
-            }
+            self.arm_kill_switch(&paths.core, config, preserve_kill_switch)?;
         }
-
-        let mut lock = match self.core.lock() {
-            Ok(lock) => lock,
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("Состояние VPN недоступно".to_string());
-            }
-        };
-        *lock = Some(ManagedCore {
-            child,
-            #[cfg(windows)]
-            _job: job,
-        });
+        self.ensure_start_not_cancelled()?;
         *self
             .started_at_ms
             .lock()
@@ -706,6 +713,7 @@ impl VpnEngine {
     }
 
     fn observe_core(&self) {
+        let Ok(_lifecycle) = self.lifecycle.try_lock() else { return };
         let core_failed = match self.core.lock() {
             Ok(mut core) => match core.as_mut() {
                 Some(process) => match process.child.try_wait() {
@@ -1433,6 +1441,28 @@ mod log_tests {
         is_tunnel_interface, is_virtual_interface, last_log_message, set_default_interface,
         EngineState,
     };
+
+    #[cfg(windows)]
+    #[test]
+    fn cancellation_terminates_owned_core_without_waiting_for_lifecycle() {
+        use super::{assign_kill_on_close_job, singbox_command, ManagedCore, VpnEngine};
+        use std::{path::Path, process::Stdio, sync::atomic::Ordering, time::{Duration, Instant}};
+
+        let engine = VpnEngine::new();
+        let child = singbox_command(Path::new("C:\\Windows\\System32\\ping.exe"))
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(Stdio::null()).spawn().unwrap();
+        let job = assign_kill_on_close_job(&child).unwrap();
+        *engine.core.lock().unwrap() = Some(ManagedCore { child, _job: job });
+        let _lifecycle = engine.lifecycle.lock().unwrap();
+        let started = Instant::now();
+        engine.cancel_start();
+        let mut core = engine.core.lock().unwrap().take().unwrap();
+        assert!(core.child.wait().unwrap().code().is_some());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(engine.start_cancelled.load(Ordering::Acquire));
+        assert_eq!(engine.current_state(), EngineState::Stopping);
+    }
 
     #[test]
     fn runtime_config_is_bound_to_the_physical_interface() {

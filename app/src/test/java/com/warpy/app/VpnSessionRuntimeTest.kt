@@ -24,6 +24,57 @@ import kotlin.test.assertEquals
 
 class VpnSessionRuntimeTest {
     @Test
+    fun `immediate stop invalidates queued startup and late success`() = runBlocking {
+        val operations = FakeOperations()
+        val runtime = newRuntime(this, operations)
+        try {
+            runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+            val oldGeneration = runtime.snapshot().generation
+            runtime.dispatch(VpnSessionEvent.StopRequested)
+            awaitState(runtime, VpnState.Stopped)
+            runtime.dispatch(VpnSessionEvent.ValidationSucceeded(oldGeneration, "profile_0"))
+            assertEquals(VpnState.Stopped, runtime.snapshot().state)
+            assertEquals(false, runtime.snapshot().shouldRun)
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun `exception during background recovery restarts instead of waiting forever`() = runBlocking {
+        val operations = FakeOperations(recovery = { throw java.io.IOException("network reset") })
+        val runtime = newRuntime(this, operations)
+        try {
+            runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+            awaitState(runtime, VpnState.Connected)
+            runtime.dispatch(
+                VpnSessionEvent.RecoveryRequested(
+                    runtime.snapshot().generation,
+                    RecoveryRequest("wake", false, true),
+                ),
+            )
+            awaitCall(operations, "start:2:profile_0")
+            awaitState(runtime, VpnState.Connected)
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun `validation IO exception recovers without disabling VPN`() = runBlocking {
+        val operations = FakeOperations(validation = { throw java.io.IOException("network reset") })
+        val runtime = newRuntime(this, operations)
+        try {
+            runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+            awaitState(runtime, VpnState.Connected)
+            assertEquals(true, runtime.snapshot().shouldRun)
+            assertEquals(1, operations.calls.count { it.startsWith("recover:") })
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
     fun `successful start publishes connected only after validation`() = runBlocking {
         val operations = FakeOperations()
         val runtime = newRuntime(this, operations)

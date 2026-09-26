@@ -507,7 +507,7 @@ test('VPN service commands are serialized while switching during connection', as
 
   assert.match(source, /let vpnOperationTail = Promise\.resolve\(\)/);
   assert.match(source, /function queueVpnOperation\(operation\)/);
-  assert.match(source, /async function startVpn\(options = \{\}\)[\s\S]*queueVpnOperation\(\(\) => startVpnOperation\(options\)\)/);
+  assert.match(source, /async function startVpn\(options = \{\}\)[\s\S]*queueVpnOperation\(\(\) => attempt === S\.connectAttempt/);
   assert.match(source, /async function stopVpn\(\)[\s\S]*\+\+S\.connectAttempt[\s\S]*queueVpnOperation\(stopVpnOperation\)/);
 });
 

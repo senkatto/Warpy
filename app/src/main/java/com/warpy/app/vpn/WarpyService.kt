@@ -115,7 +115,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     @Volatile private var commandServer: CommandServer? = null
     @Volatile private var statusClient: com.hiddify.core.libbox.CommandClient? = null
     @Volatile private var tun: ParcelFileDescriptor? = null
-    private var upstreamNetwork: Network? = null
+    @Volatile private var upstreamNetwork: Network? = null
         set(value) {
             field = value
             publishedPhysicalNetwork = value
@@ -142,7 +142,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     private val dnsExecutor: ExecutorService = Executors.newCachedThreadPool()
     private val secureRandom = SecureRandom()
     private val tunnelValidator: TunnelValidator = HttpTunnelValidator()
-    private var sessionRuntime: VpnSessionRuntime? = null
+    @Volatile private var sessionRuntime: VpnSessionRuntime? = null
     private var lastPublicationSideEffectKey: String? = null
     private val coreGateway: CoreGateway by lazy {
         DefaultCoreGateway(
@@ -153,11 +153,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             handshakeRetryDelayMillis = COMMAND_HANDSHAKE_RETRY_DELAY_MS,
         )
     }
-    private val dnsExchanger = UdpDnsExchanger(
-        protectSocket = { socket -> protect(socket) },
-        timeoutMillis = DNS_TIMEOUT_MS,
-    )
-
     override fun onCreate() {
         super.onCreate()
         setupLibbox()
@@ -166,6 +161,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         cancelKeepAlive()
     }
 
+    @Synchronized
     private fun sessionRuntime(): VpnSessionRuntime = sessionRuntime ?: VpnSessionRuntime(
         scope = serviceScope,
         reducer = VpnSessionReducer(ElapsedClock(SystemClock::elapsedRealtime)),
@@ -251,11 +247,11 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
                 if (tag.isNotBlank()) {
                     cancelWakeProbeWork()
                     if (vpnState == VpnState.Connected && commandServer != null) {
-                        serviceScope.launch {
+                        serviceScope.launch(start = CoroutineStart.UNDISPATCHED) {
                             sessionRuntime().dispatch(VpnSessionEvent.SwitchRequested(tag))
                         }
                     } else {
-                        serviceScope.launch {
+                        serviceScope.launch(start = CoroutineStart.UNDISPATCHED) {
                             sessionRuntime().dispatch(VpnSessionEvent.StartRequested(tag))
                         }
                     }
@@ -264,7 +260,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             }
             ACTION_STOP -> {
                 explicitStopRequested = true
-                if (hasCoreResources()) {
+                if (hasCoreResources() || sessionRuntime != null) {
                     stopCore(clearSavedConfig = true)
                 } else {
                     cancelWakeProbeWork()
@@ -493,6 +489,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private suspend fun startCoreResources(requestedTag: String) {
         beginCoreResourceTransaction()
+        lastProbeFailure = null
         try {
             val settings = com.warpy.app.data.SettingsStore(this@WarpyService).load()
             val requestedIndex = requestedTag.removePrefix("profile_").toIntOrNull()
@@ -617,7 +614,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             saveShouldBeRunning(false)
         }
         if (clearSavedConfig || explicitStopRequested) cancelKeepAlive()
-        serviceScope.launch {
+        serviceScope.launch(start = CoroutineStart.UNDISPATCHED) {
             sessionRuntime().dispatch(VpnSessionEvent.StopRequested)
         }
     }
@@ -631,7 +628,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         if (config.isBlank() || settings.profile == null) {
             Log.e(TAG, "empty config")
         }
-        serviceScope.launch {
+        serviceScope.launch(start = CoroutineStart.UNDISPATCHED) {
             val event = if (forceRestart) {
                 VpnSessionEvent.RestartRequested(requestedTag)
             } else {
@@ -983,13 +980,10 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private fun humanizeStartError(error: Exception): String {
         val message = stripAnsi(error.message.orEmpty().ifBlank { error.toString() })
-        val probeMessage = lastProbeFailure.orEmpty()
         return when {
             message.contains("health proxy", ignoreCase = true) ->
                 "VPN не запустился: локальный порт проверки занят"
             isCommandChannelError(error) -> "VPN не запустился: внутренний сервис не ответил"
-            probeMessage.contains("SOCKS server general failure", ignoreCase = true) ->
-                "Профиль не подключился: сервер не принял Hysteria2 handshake; проверьте SNI, пароль и obfs"
             message.contains("x509", ignoreCase = true) ||
                 message.contains("certificate is valid for", ignoreCase = true) ->
                 "Профиль не подключился: TLS-сертификат не совпадает с SNI"
@@ -1757,6 +1751,14 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         override fun exchange(ctx: ExchangeContext, message: ByteArray) {
             val network = upstreamNetwork ?: findUpstreamNetwork() ?: error("missing upstream network")
             val endpoints = upstreamDnsServers(network).map(::DnsEndpoint)
+            val dnsExchanger = UdpDnsExchanger(
+                protectSocket = { socket ->
+                    check(protect(socket)) { "Failed to protect DNS socket" }
+                    network.bindSocket(socket)
+                },
+                timeoutMillis = DNS_TIMEOUT_MS,
+                registerCancellation = { cancel -> ctx.onCancel { cancel() } },
+            )
             ctx.rawSuccess(dnsExchanger.exchange(message, endpoints))
         }
 
@@ -1766,7 +1768,11 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
                 val latch = CountDownLatch(1)
                 var failure: Throwable? = null
                 val signal = CancellationSignal()
-                ctx.onCancel(signal::cancel)
+                ctx.onCancel {
+                    failure = CancellationException("DNS lookup cancelled")
+                    signal.cancel()
+                    latch.countDown()
+                }
                 val queryType = when {
                     network.endsWith("4") -> DnsResolver.TYPE_A
                     network.endsWith("6") -> DnsResolver.TYPE_AAAA
@@ -1874,7 +1880,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             connectivity.getLinkProperties(network)
             ?.dnsServers
             ?.filter { it.hostAddress != null }
-            .orEmpty() + listOf("192.168.1.1", "1.1.1.1", "8.8.8.8").map(InetAddress::getByName)
+            .orEmpty() + listOf("1.1.1.1", "8.8.8.8").map(InetAddress::getByName)
         ).distinctBy { it.hostAddress }
 
     companion object {

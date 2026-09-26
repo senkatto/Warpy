@@ -33,10 +33,9 @@ import android.content.Intent
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Proxy
-import java.net.Socket
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
+import com.warpy.app.vpn.measureTcpLatency
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -99,6 +98,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val store = SettingsStore(application)
     private val handler = Handler(Looper.getMainLooper())
     private var pingInFlight = false
+    private var lastPingAt = 0L
     private var cleared = false
     private var speedTestJob: kotlinx.coroutines.Job? = null
     private val _state = mutableStateOf(MainUiState(settings = store.load()))
@@ -865,43 +865,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         )
 
-        val profile = state.settings.profile ?: return
-        if (!pingInFlight && state.diagnostics.status == VpnStatus.Connected) {
+        val profileIndex = state.diagnostics.runtimeProfileIndex ?: state.settings.activeProfileIndex
+        val profile = state.settings.profiles.getOrNull(profileIndex) ?: return
+        if (!pingInFlight && state.diagnostics.status == VpnStatus.Connected &&
+            now - lastPingAt >= PING_INTERVAL_MS
+        ) {
             pingInFlight = true
-            thread(name = "warpy-ping", isDaemon = true) {
-                val ping = tcpPing(profile.server, profile.port)
-                    .takeUnless { it == "—" }
-                    ?: tcpPing(PING_FALLBACK_HOST, PING_FALLBACK_PORT)
-                handler.post {
-                    if (cleared) return@post
+            lastPingAt = now
+            viewModelScope.launch {
+                try {
+                    val ping = withContext(Dispatchers.IO) {
+                        runCatching {
+                            val network = checkNotNull(com.warpy.app.vpn.WarpyService.activePhysicalNetwork())
+                            val address = network.getAllByName(profile.server).first()
+                            // UDP listeners cannot answer a TCP handshake. Time the same
+                            // server's HTTPS port, independently of tunnel validation.
+                            val port = if (profile.protocol.isUdpBased) 443 else profile.port
+                            "${measureTcpLatency(network.socketFactory, InetSocketAddress(address, port))} мс"
+                        }.getOrDefault("—")
+                    }
+                    val current = _state.value
+                    if (!cleared && current.diagnostics.status == VpnStatus.Connected &&
+                        current.diagnostics.connectedAtMillis == state.diagnostics.connectedAtMillis &&
+                        current.diagnostics.runtimeProfileIndex == state.diagnostics.runtimeProfileIndex &&
+                        current.settings.activeProfileIndex == state.settings.activeProfileIndex
+                    ) {
+                        _state.value = current.copy(diagnostics = current.diagnostics.copy(pingText = ping))
+                    }
+                } finally {
                     pingInFlight = false
-                    _state.value = _state.value.copy(diagnostics = _state.value.diagnostics.copy(pingText = ping))
                 }
             }
         }
-    }
-
-    private fun tcpPing(host: String, port: Int): String {
-        val start = SystemClock.elapsedRealtime()
-        return runCatching {
-            Socket().use { socket ->
-                socket.connect(InetSocketAddress(host, port), PING_TIMEOUT_MS.toInt())
-            }
-            "${SystemClock.elapsedRealtime() - start} мс"
-        }.getOrDefault("—")
-    }
-
-    private fun measureHttpPing(client: OkHttpClient): Long {
-        var best = Long.MAX_VALUE
-        repeat(3) {
-            val start = SystemClock.elapsedRealtime()
-            client.newCall(Request.Builder().url(PING_TEST_URL).get().build()).execute().use { response ->
-                check(response.isSuccessful) { "HTTP ${response.code}" }
-                response.body?.close()
-            }
-            best = minOf(best, SystemClock.elapsedRealtime() - start)
-        }
-        return best
     }
 
     private fun createSpeedTestClient(): Pair<OkHttpClient, Long> {
@@ -922,6 +917,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .callTimeout(SPEED_TEST_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
             .build()
         return client to measureHttpPing(client)
+    }
+
+    private fun measureHttpPing(client: OkHttpClient): Long {
+        var best = Long.MAX_VALUE
+        repeat(3) {
+            val start = SystemClock.elapsedRealtime()
+            client.newCall(Request.Builder().url(PING_TEST_URL).get().build()).execute().use { response ->
+                check(response.isSuccessful) { "HTTP ${response.code}" }
+                response.body?.close()
+            }
+            best = minOf(best, SystemClock.elapsedRealtime() - start)
+        }
+        return best
     }
 
     private data class SpeedSample(val timestamp: Long, val bytes: Long)
@@ -1141,10 +1149,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val STATS_INTERVAL_MS = 1000L
-        const val PING_TIMEOUT_MS = 2500L
+        const val PING_INTERVAL_MS = 10_000L
         const val PROFILE_PROBE_TTL_MS = 3 * 60 * 1000L
-        const val PING_FALLBACK_HOST = "1.1.1.1"
-        const val PING_FALLBACK_PORT = 443
         const val SPEED_TEST_PROXY_HOST = "127.0.0.1"
         const val SPEED_TEST_TIMEOUT_MS = 15_000
         const val SPEED_TEST_STAGE_MS = 7_000L

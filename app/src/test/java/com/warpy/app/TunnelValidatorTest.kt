@@ -20,6 +20,25 @@ import okhttp3.mockwebserver.SocketPolicy
 
 class TunnelValidatorTest {
     @Test
+    fun `watchdog checks the independent fallback before declaring tunnel failure`() = runBlocking {
+        MockWebServer().use { proxy ->
+            proxy.enqueue(MockResponse().setResponseCode(503))
+            proxy.enqueue(MockResponse().setResponseCode(204))
+            proxy.start()
+            val result = HttpTunnelValidator().validate(
+                request(proxy.port).copy(
+                    fallbackUrls = listOf("http://fallback.warpy.test/generate_204"),
+                    retryDelayMillis = 0L,
+                ),
+            )
+            assertTrue(result.isValid)
+            assertEquals(listOf(503, 204), result.attempts.map { it.statusCode })
+            assertTrue(proxy.takeRequest().requestLine.contains("probe.warpy.test"))
+            assertTrue(proxy.takeRequest().requestLine.contains("fallback.warpy.test"))
+        }
+    }
+
+    @Test
     fun `validates through the authenticated local proxy`() = runBlocking {
         MockWebServer().use { proxy ->
             proxy.enqueue(

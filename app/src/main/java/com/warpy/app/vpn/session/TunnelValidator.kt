@@ -73,7 +73,8 @@ internal class HttpTunnelValidator : TunnelValidator {
             .build()
         val attempts = mutableListOf<TunnelValidationAttempt>()
 
-        repeat(request.maxAttempts) { attemptIndex ->
+        val attemptCount = maxOf(request.maxAttempts, validationUrls.size)
+        repeat(attemptCount) { attemptIndex ->
             currentCoroutineContext().ensureActive()
             try {
                 val validationUrl = validationUrls[attemptIndex % validationUrls.size]
@@ -91,7 +92,7 @@ internal class HttpTunnelValidator : TunnelValidator {
                     failure = error.message.orEmpty().ifBlank { error.toString() }.take(180),
                 )
             }
-            if (request.retryDelayMillis > 0L) {
+            if (attemptIndex + 1 < attemptCount && request.retryDelayMillis > 0L) {
                 delay(request.retryDelayMillis)
             }
         }

@@ -854,6 +854,17 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
     { inbound: [TAGS.tun], action: 'sniff', timeout: '300ms' },
     directServerRule(profile),
     { protocol: 'dns', action: 'hijack-dns' },
+    // The Google HE IPv6 route rejects QUIC on the server. Reject locally so
+    // browsers immediately retry over TCP instead of waiting for UDP timeouts.
+    {
+      domain: flowDomains,
+      domain_suffix: flowDomainSuffixes,
+      network: 'udp',
+      port: 443,
+      action: 'reject',
+      method: 'default',
+      no_drop: true,
+    },
     {
       domain_suffix: ROUTING.healthDomainSuffixes,
       action: 'route',

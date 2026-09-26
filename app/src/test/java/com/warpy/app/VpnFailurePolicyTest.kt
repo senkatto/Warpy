@@ -1,6 +1,5 @@
 package com.warpy.app
 
-import com.warpy.app.model.Protocol
 import com.warpy.app.vpn.classifyInitialValidationFailure
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -12,7 +11,6 @@ class VpnFailurePolicyTest {
     fun `missing validated network remains recoverable`() {
         val failure = classifyInitialValidationFailure(
             hasValidatedNetwork = false,
-            protocol = Protocol.Hysteria2,
             probeFailure = "authentication failed",
         )
 
@@ -21,30 +19,24 @@ class VpnFailurePolicyTest {
     }
 
     @Test
-    fun `hysteria handshake rejection is terminal and actionable`() {
+    fun `generic SOCKS failure remains recoverable instead of disabling VPN`() {
         val failure = classifyInitialValidationFailure(
             hasValidatedNetwork = true,
-            protocol = Protocol.Hysteria2,
             probeFailure = "SOCKS server general failure",
         )
 
-        assertFalse(failure.recoverable)
-        assertEquals(
-            "Профиль не подключился: сервер не принял Hysteria2 handshake; проверьте SNI, пароль и obfs",
-            failure.message,
-        )
+        assertTrue(failure.recoverable)
+        assertEquals("Соединение восстанавливается", failure.message)
     }
 
     @Test
     fun `authentication and tls failures are terminal`() {
         val authentication = classifyInitialValidationFailure(
             hasValidatedNetwork = true,
-            protocol = Protocol.Vless,
             probeFailure = "proxy authentication failed",
         )
         val tls = classifyInitialValidationFailure(
             hasValidatedNetwork = true,
-            protocol = Protocol.Trojan,
             probeFailure = "x509: certificate is valid for another host",
         )
 
@@ -64,17 +56,14 @@ class VpnFailurePolicyTest {
     fun `transport failures with a working physical network remain recoverable`() {
         val timeout = classifyInitialValidationFailure(
             hasValidatedNetwork = true,
-            protocol = Protocol.Vless,
             probeFailure = "connect timed out",
         )
         val refused = classifyInitialValidationFailure(
             hasValidatedNetwork = true,
-            protocol = Protocol.Trojan,
             probeFailure = "connection refused",
         )
         val unknown = classifyInitialValidationFailure(
             hasValidatedNetwork = true,
-            protocol = Protocol.Vless,
             probeFailure = "unexpected EOF",
         )
 

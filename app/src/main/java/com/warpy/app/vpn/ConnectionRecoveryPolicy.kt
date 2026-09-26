@@ -7,6 +7,9 @@ internal data class UpstreamIdentity(
     val isMetered: Boolean? = null,
 )
 
+internal fun UpstreamIdentity.hasSameConnection(other: UpstreamIdentity?): Boolean =
+    other != null && networkHandle == other.networkHandle && interfaceName == other.interfaceName
+
 internal fun isUsablePhysicalNetwork(
     hasInternet: Boolean,
     isValidated: Boolean,

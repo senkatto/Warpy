@@ -4,6 +4,7 @@ import com.warpy.app.vpn.COMMAND_HANDSHAKE_RETRY_DELAY_MS
 import com.warpy.app.vpn.MAX_COMMAND_HANDSHAKE_ATTEMPTS
 import com.warpy.app.vpn.NETWORK_CHANGE_DEBOUNCE_MS
 import com.warpy.app.vpn.UpstreamIdentity
+import com.warpy.app.vpn.hasSameConnection
 import com.warpy.app.vpn.isHandoverCandidatePhysicalNetwork
 import com.warpy.app.vpn.isUsablePhysicalNetwork
 import com.warpy.app.vpn.physicalNetworkPriority
@@ -54,6 +55,16 @@ class ConnectionRecoveryPolicyTest {
         assertFalse(wifiBeforeSleep == wifiAfterSleep)
         assertFalse(wifiBeforeSleep == wifiBeforeSleep.copy(dnsServers = listOf("1.1.1.1")))
         assertFalse(wifiBeforeSleep == wifiBeforeSleep.copy(isMetered = true))
+    }
+
+    @Test
+    fun `DNS and metering updates do not reset the physical connection`() {
+        val wifi = UpstreamIdentity(151L, "wlan0", listOf("192.168.1.1"), false)
+        assertTrue(wifi.hasSameConnection(wifi.copy(dnsServers = listOf("1.1.1.1"))))
+        assertTrue(wifi.hasSameConnection(wifi.copy(isMetered = true)))
+        assertFalse(wifi.hasSameConnection(wifi.copy(networkHandle = 152L)))
+        assertFalse(wifi.hasSameConnection(wifi.copy(interfaceName = "rmnet0")))
+        assertFalse(wifi.hasSameConnection(null))
     }
 
     @Test

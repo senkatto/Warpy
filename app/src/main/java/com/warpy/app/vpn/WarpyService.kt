@@ -116,6 +116,10 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     @Volatile private var statusClient: com.hiddify.core.libbox.CommandClient? = null
     @Volatile private var tun: ParcelFileDescriptor? = null
     private var upstreamNetwork: Network? = null
+        set(value) {
+            field = value
+            publishedPhysicalNetwork = value
+        }
     private var interfaceListener: InterfaceUpdateListener? = null
     @Volatile private var localProxyConfig: LocalProxyConfig? = null
     @Volatile private var activeOutboundTag: String? = null
@@ -564,7 +568,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             val failure = if (reason == ValidationReason.Initial) {
                 classifyInitialValidationFailure(
                     hasValidatedNetwork = findUpstreamNetwork() != null,
-                    protocol = preferredProfile?.protocol,
                     probeFailure = lastProbeFailure,
                 )
             } else {
@@ -800,9 +803,11 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             return
         }
 
-        Log.i(TAG, "Validated physical network changed to $identity")
+        val sameConnection = identity?.hasSameConnection(lastUpstreamIdentity) == true
+        Log.i(TAG, "Physical network updated to $identity")
         lastUpstreamIdentity = identity
         upstreamNetwork = state.network
+        if (sameConnection) return
         runCatching { setUnderlyingNetworks(arrayOf(state.network)) }
             .onFailure { Log.w(TAG, "failed to set VPN underlying network", it) }
         updateDefaultInterface(state.network)
@@ -1904,6 +1909,8 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
 
         fun activeProxyPort(): Int = publishedLocalProxyConfig?.port ?: 0
 
+        internal fun activePhysicalNetwork(): Network? = publishedPhysicalNetwork
+
         fun activeProxyAuthorization(): String? = publishedLocalProxyConfig?.let { config ->
             val credentials = "${config.username}:${config.password}".toByteArray(Charsets.UTF_8)
             "Basic ${Base64.getEncoder().encodeToString(credentials)}"
@@ -1997,6 +2004,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         private const val LOCAL_PROXY_BIND_ATTEMPTS = 3
         private const val STATUS_INTERVAL_NANOS = 1_000_000_000L
         @Volatile private var publishedLocalProxyConfig: LocalProxyConfig? = null
+        @Volatile private var publishedPhysicalNetwork: Network? = null
 
     }
 }

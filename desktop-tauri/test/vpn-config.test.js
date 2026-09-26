@@ -214,7 +214,7 @@ test('preserves HTTPUpgrade instead of silently changing it to TCP', () => {
   });
 });
 
-test('rejects QUIC only when compatibility mode is enabled', () => {
+test('rejects QUIC globally only when compatibility mode is enabled', () => {
   const vless = parseProfileLink(
     'vless://00000000-0000-4000-8000-000000000000@example.com:443'
       + '?security=reality&sni=www.example.com&pbk=public-key&sid=0123abcd&type=tcp#VLESS',
@@ -222,17 +222,17 @@ test('rejects QUIC only when compatibility mode is enabled', () => {
   const hysteria = parseProfileLink('hysteria2://secret@203.0.113.10:443#HY2');
 
   assert.equal(
-    buildSingBoxConfig(vless).route.rules.some(rule => rule.network === 'udp' && rule.port === 443),
+    buildSingBoxConfig(vless).route.rules.some(rule => rule.network === 'udp' && rule.port === 443 && !rule.domain_suffix),
     false,
   );
   assert.equal(
-    buildSingBoxConfig(hysteria).route.rules.some(rule => rule.network === 'udp' && rule.port === 443),
+    buildSingBoxConfig(hysteria).route.rules.some(rule => rule.network === 'udp' && rule.port === 443 && !rule.domain_suffix),
     false,
   );
 
   const vlessConfig = buildSingBoxConfig(vless, { quic: true });
   const vlessQuicRule = vlessConfig.route.rules.find(
-    rule => rule.network === 'udp' && rule.port === 443 && !rule.process_name,
+    rule => rule.network === 'udp' && rule.port === 443 && !rule.process_name && !rule.domain_suffix,
   );
   assert.deepEqual(vlessQuicRule, {
     network: 'udp',
@@ -315,7 +315,7 @@ test('hijacks DNS before split rules and forces health checks through VPN', () =
   const healthRule = config.route.rules.find(rule => rule.domain_suffix?.includes('speed.cloudflare.com'));
   assert.ok(dnsIndex >= 0 && dnsIndex < appIndex);
   assert.equal(healthRule.outbound, 'proxy');
-  assert.equal(config.route.rules.some(rule => rule.port?.includes(53) && rule.outbound === 'direct'), false);
+  assert.equal(config.route.rules.some(rule => (rule.port === 53 || rule.port?.includes?.(53)) && rule.outbound === 'direct'), false);
 });
 
 test('uses proxy-detoured DNS over HTTPS and bounds slow proxy dials', () => {
@@ -476,6 +476,18 @@ test('ad blocking is self-contained and does not reference a missing rule-set', 
   const config = buildSingBoxConfig(profile, { adblock: true });
   assert.equal(config.route.rule_set, undefined);
   assert.ok(config.dns.rules.some(rule => rule.action === 'predefined'));
+});
+
+test('Google QUIC fails immediately even when general QUIC blocking is disabled', () => {
+  const profile = parseProfileLink('hysteria2://secret@203.0.113.10:443#HY2');
+  const config = buildSingBoxConfig(profile, {quic: false});
+  const rule = config.route.rules.find(rule => rule.network === 'udp' && rule.port === 443
+    && rule.domain_suffix?.includes('google.com'));
+  assert.equal(rule?.action, 'reject');
+  assert.equal(rule?.no_drop, true);
+  assert.ok(rule?.domain.includes('labs.google'));
+  assert.equal(config.route.rules.some(rule => rule.network === 'udp' && rule.port === 443
+    && !rule.domain && !rule.domain_suffix), false);
 });
 
 test('rejects malformed and unsupported links', () => {
@@ -655,4 +667,3 @@ test('Flow and Google AI domains cannot be bypassed in bypass mode', () => {
   assert.equal(bypassedDomains.includes('google.com'), false);
   assert.equal(bypassedDomains.includes('gemini.google.com'), false);
 });
-

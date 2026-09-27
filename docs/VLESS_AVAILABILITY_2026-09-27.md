@@ -26,7 +26,7 @@ Follow-up to the reported Android VLESS failure. Checks performed around
   The next check at 15:47:04 returned HTTPS 204 on its first attempt. The tunnel
   did not restart in response to these timeouts. Their underlying cause was not
   established, and the successful earlier checks do not rule out intermittent
-  request failures. Profile-list checks currently use only gstatic, so a failed
+  request failures. Before this fix, profile-list checks used only gstatic, so a failed
   single-destination test is not proof that the VLESS server itself is down.
 - The profile list measures an HTTPS request through the proxy. Its duration
   includes the destination and, for Google, the Hurricane Electric route. This
@@ -39,13 +39,37 @@ An ordinary unbound PC TCP test initially timed out. That result is not a valid
 direct-path measurement while the VPN is active; the explicit physical-interface
 test and complete external VLESS requests above succeeded.
 
+## Android correction
+
+Profile-list checking now tries Cloudflare through the same profile if its Google
+request fails or returns no positive delay. A successful primary check does not
+send the fallback request. Both destinations must fail before publishing an
+unavailable result. The batch watchdog budget now allows both bounded requests;
+coroutine cancellation is propagated rather than published as a failed profile.
+
+This addresses the confirmed dependency on a single control destination. It does
+not establish that this caused the user's earlier connection failure, and it does
+not change the server's Google/HE routing.
+
+Validation: all 199 Android JVM tests passed, including four new controller HTTP
+regressions covering primary success, fallback success, both destinations failing,
+and a zero-delay response. Text checks passed; lint reported 0 errors and the same
+34 warnings as the previous build. The production-signed APK was copied to
+`D:\Sync\VetomenAPK\Warpy.apk`, installed with ADB, and launched successfully.
+At 15:52:33 the reconnected SNKT session returned HTTP 204 on its first validation
+attempt. The connected screen showed 32 ms, and the new profile-list check showed
+SNKT at 223 ms (Hysteria2 at 213 ms and Naive at 404 ms).
+
+APK SHA-256: `F43D99C94F7E2D321B5D4E4310C39E01A1C696D02B76B87165125961809948AD`.
+
 ## Outcome and limits
 
 The reported earlier Android failure was not reproduced. Its cause cannot be
-established from the not-checked screenshot. No application or server settings
-were changed during this diagnostic follow-up. Google/HE routing and the PC VPN
-remained in place. The phone was left connected to the existing SNKT profile.
+established from the not-checked screenshot. No server settings were changed.
+Google/HE routing and the PC VPN remained in place throughout this follow-up.
+The phone was left connected to the existing SNKT profile after installation.
 
 This is a point-in-time Wi-Fi check, not a guarantee against intermittent failures
-or proof of cellular-network availability. Production artifacts and versions
-remain those recorded in `VPN_CANCELLATION_AUDIT_2026-09-27.md`.
+or proof of cellular-network availability. The Windows artifact remains the one
+recorded in `VPN_CANCELLATION_AUDIT_2026-09-27.md`; the Android public version
+remains 1.0.7.

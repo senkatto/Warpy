@@ -25,7 +25,6 @@ import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
-import java.net.Socket
 import java.net.UnknownHostException
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -93,7 +92,8 @@ class ProfileProbeService : Service(), PlatformInterface, CommandServerHandler {
                 indices.map { index ->
                     async {
                         semaphore.withPermit {
-                            val result = runCatching { probe(port, secret, index) }
+                            val result = runCatching { ProfileLatencyProbe.measure(port, secret, index) }
+                                .onFailure { if (it is CancellationException) throw it }
                                 .onFailure { Log.w(TAG, "profile probe failed index=$index", it) }
                             publish(requestId, index, result.getOrNull())
                         }
@@ -110,32 +110,6 @@ class ProfileProbeService : Service(), PlatformInterface, CommandServerHandler {
             runCatching { server?.close() }
             server = null
             finish(startId, requestId)
-        }
-    }
-
-    private fun probe(port: Int, secret: String, index: Int): Int {
-        val path = "/proxies/profile_$index/delay" +
-            "?url=https%3A%2F%2Fwww.gstatic.com%2Fgenerate_204&timeout=4000"
-        Socket().use { socket ->
-            socket.connect(InetSocketAddress("127.0.0.1", port), 2_000)
-            socket.soTimeout = 6_000
-            val writer = socket.getOutputStream().bufferedWriter(Charsets.US_ASCII)
-            writer.write("GET $path HTTP/1.1\r\n")
-            writer.write("Host: 127.0.0.1:$port\r\n")
-            writer.write("Authorization: Bearer $secret\r\n")
-            writer.write("Connection: close\r\n\r\n")
-            writer.flush()
-            val response = socket.getInputStream().bufferedReader().readText()
-            if (!response.startsWith("HTTP/1.1 200") && !response.startsWith("HTTP/1.0 200")) {
-                error(response.lineSequence().firstOrNull().orEmpty())
-            }
-            return Regex("\\\"delay\\\"\\s*:\\s*(\\d+)")
-                .find(response)
-                ?.groupValues
-                ?.get(1)
-                ?.toIntOrNull()
-                ?.takeIf { it > 0 }
-                ?: error("empty delay")
         }
     }
 

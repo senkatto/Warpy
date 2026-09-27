@@ -23,6 +23,7 @@ import com.warpy.app.model.VpnProfile
 import com.warpy.app.vpn.SingBoxConfigBuilder
 import com.warpy.app.vpn.ProfileProbeService
 import com.warpy.app.vpn.ProfileProbeRequest
+import com.warpy.app.vpn.ProfileLatencyProbe
 import com.warpy.app.vpn.VpnCommandCoordinator
 import com.warpy.app.vpn.VpnLaunchResult
 import com.warpy.app.updates.AndroidRelease
@@ -245,7 +246,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         .putExtra(ProfileProbeService.EXTRA_REQUEST_ID, request.id)
                         .putExtra(ProfileProbeService.EXTRA_INDICES, requested.toIntArray()),
                 )
-                delay(10_000L + ((requested.size + 3) / 4) * 8_000L)
+                delay(10_000L + ((requested.size + 3) / 4) * ProfileLatencyProbe.MAX_DURATION_MILLIS)
                 cancelProfileProbes()
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled

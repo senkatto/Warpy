@@ -21,6 +21,13 @@ Follow-up to the reported Android VLESS failure. Checks performed around
 - Android's profile list reported SNKT available at 219 ms. Selecting SNKT
   connected successfully. At 15:45:58 the tunnel validation returned HTTP 204
   on its first attempt; the main screen showed 28 ms physical-server RTT.
+- At 15:46:33, a background check recorded read timeouts for both HTTPS targets,
+  followed by a successful HTTP fallback (logged as code 200 by the validator).
+  The next check at 15:47:04 returned HTTPS 204 on its first attempt. The tunnel
+  did not restart in response to these timeouts. Their underlying cause was not
+  established, and the successful earlier checks do not rule out intermittent
+  request failures. Profile-list checks currently use only gstatic, so a failed
+  single-destination test is not proof that the VLESS server itself is down.
 - The profile list measures an HTTPS request through the proxy. Its duration
   includes the destination and, for Google, the Hurricane Electric route. This
   differs from the physical-server RTT on the connected screen.

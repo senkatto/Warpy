@@ -5,6 +5,9 @@ description = "Warpy VPN Client"
 authors = ["senkatto"]
 edition = "2021"
 
+[features]
+native-ui = ["dep:rquickjs", "dep:resvg", "reqwest/stream"]
+
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }
 
@@ -21,6 +24,12 @@ sysinfo = "0.29"
 regex = "1.13"
 url = "2.5"
 zip = { version = "2.4", default-features = false }
+rquickjs = { version = "0.14", optional = true }
+resvg = { version = "0.45", default-features = false, optional = true }
+tokio = { version = "1", features = ["time", "sync", "macros"] }
+base64 = "0.22"
+tokio-stream = "0.1"
+windows-numerics = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-single-instance = "2"
@@ -29,6 +38,18 @@ windows-service = "0.8.1"
 windows = { version = "0.61", features = [
   "Win32_Networking_NetworkListManager",
   "Win32_System_Com",
+  "Win32_Graphics_Direct2D",
+  "Win32_Graphics_Direct2D_Common",
+  "Win32_Graphics_DirectWrite",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Imaging",
+  "Win32_System_LibraryLoader",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Input_KeyboardAndMouse",
 ] }
 windows-sys = { version = "0.59", features = [
   "Win32_Foundation",
@@ -51,6 +72,7 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 minisign-verify = "0.2.5"
+png = "0.17"
 
 [profile.release]
 panic = "abort"

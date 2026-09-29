@@ -1,6 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod diagnostics;
+#[cfg(all(windows, feature = "native-ui"))]
+mod native_ui;
 #[cfg(windows)]
 mod network_context;
 #[cfg(windows)]
@@ -45,7 +47,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{ProcessExt, System, SystemExt};
-use tauri::{Emitter, Manager, State};
+#[cfg(not(all(windows, feature = "native-ui")))]
+use tauri::Emitter;
+use tauri::{Manager, State};
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const MAX_VPN_CONFIG_BYTES: usize = 768 * 1024;
@@ -767,6 +771,18 @@ fn main() {
 }
 
 fn run_app(
+    autostart_launch: bool,
+    post_update_launch: bool,
+    rollback_shutdown: bool,
+) -> Result<(), String> {
+    #[cfg(all(windows, feature = "native-ui"))]
+    return native_ui::run(autostart_launch, post_update_launch, rollback_shutdown);
+    #[cfg(not(all(windows, feature = "native-ui")))]
+    run_web_app(autostart_launch, post_update_launch, rollback_shutdown)
+}
+
+#[cfg(not(all(windows, feature = "native-ui")))]
+fn run_web_app(
     autostart_launch: bool,
     post_update_launch: bool,
     rollback_shutdown: bool,

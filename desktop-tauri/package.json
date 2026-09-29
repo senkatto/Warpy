@@ -6,15 +6,17 @@
   "scripts": {
     "contract:generate": "node ../tools/generate-core-contract.mjs",
     "contract:check": "node ../tools/generate-core-contract.mjs --check",
-    "pretest": "npm run contract:check",
+    "pretest": "npm run contract:check && node scripts/build-native-ui.mjs",
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
     "build:updater": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
+    "build:native": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1 -Native",
     "test": "node --test"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0"
+    "@tauri-apps/cli": "^2.0.0",
+    "esbuild": "^0.28.2"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

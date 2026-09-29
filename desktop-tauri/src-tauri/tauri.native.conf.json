@@ -1,0 +1,4 @@
+{
+  "app": { "windows": [] },
+  "bundle": { "windows": { "webviewInstallMode": { "type": "skip" } } }
+}

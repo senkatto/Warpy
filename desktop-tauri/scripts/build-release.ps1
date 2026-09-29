@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$Native)
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -34,7 +34,12 @@ try {
         $loadedLocalKey = $true
     }
 
-    & npx tauri build --config src-tauri/tauri.updater.conf.json
+    if ($Native) {
+        & npx tauri build --features native-ui --config src-tauri/tauri.native.conf.json --config src-tauri/tauri.updater.conf.json
+    }
+    else {
+        & npx tauri build --config src-tauri/tauri.updater.conf.json
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri release build failed with exit code $LASTEXITCODE."
     }

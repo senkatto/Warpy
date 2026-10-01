@@ -102,6 +102,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var pingInFlight = false
     private var lastPingAt = 0L
     private var cleared = false
+    private var uiVisible = false
+    private var statsJob: kotlinx.coroutines.Job? = null
+    private var automaticUpdateJob: kotlinx.coroutines.Job? = null
     private var speedTestJob: kotlinx.coroutines.Job? = null
     private val _state = mutableStateOf(MainUiState(settings = store.load()))
     val state: State<MainUiState> = _state
@@ -117,17 +120,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         handler.post { regenerateConfig() }
-        scheduleStats()
-        viewModelScope.launch {
-            delay(12_000)
+    }
+
+    fun setUiVisible(visible: Boolean) {
+        if (uiVisible == visible || cleared) return
+        uiVisible = visible
+        statsJob?.cancel()
+        automaticUpdateJob?.cancel()
+        statsJob = null
+        automaticUpdateJob = null
+        if (!visible) return
+
+        statsJob = viewModelScope.launch {
             while (true) {
-                checkForUpdates(silent = true)
+                updateConnectionStats()
+                delay(STATS_INTERVAL_MS)
+            }
+        }
+        automaticUpdateJob = viewModelScope.launch {
+            while (true) {
                 delay(15 * 60 * 1000L)
+                checkForUpdates(silent = true)
             }
         }
     }
 
     fun checkForUpdates(silent: Boolean = false) {
+        if (silent && !uiVisible) return
         if (updateCheckInFlight || _state.value.update.stage == UpdateStage.Downloading) return
         if (silent) {
             val now = SystemClock.elapsedRealtime()
@@ -832,22 +851,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun scheduleStats() {
-        handler.postDelayed(
-            {
-                updateConnectionStats()
-                scheduleStats()
-            },
-            STATS_INTERVAL_MS,
-        )
-    }
-
     fun setTrafficStats(rxSpeed: Long, txSpeed: Long) {
+        if (!uiVisible) return
         val active = _state.value.diagnostics.status == VpnStatus.Connected || _state.value.diagnostics.status == VpnStatus.Connecting
         if (!active) return
+        val speedText = formatSpeed(rxSpeed.toDouble() + txSpeed.toDouble())
+        if (_state.value.diagnostics.speedText == speedText) return
         _state.value = _state.value.copy(
             diagnostics = _state.value.diagnostics.copy(
-                speedText = formatSpeed(rxSpeed.toDouble() + txSpeed.toDouble())
+                speedText = speedText
             )
         )
     }
@@ -895,7 +907,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }.getOrDefault("—")
                     }
                     val current = _state.value
-                    if (!cleared && current.diagnostics.status == VpnStatus.Connected &&
+                    if (!cleared && uiVisible && current.diagnostics.status == VpnStatus.Connected &&
                         current.diagnostics.connectedAtMillis == state.diagnostics.connectedAtMillis &&
                         current.diagnostics.runtimeProfileIndex == state.diagnostics.runtimeProfileIndex &&
                         current.settings.activeProfileIndex == state.settings.activeProfileIndex

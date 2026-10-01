@@ -56,6 +56,9 @@ internal fun physicalNetworkPriority(
 internal fun shouldRetryCommandHandshake(failedAttempts: Int, elapsedMillis: Long): Boolean =
     failedAttempts < MAX_COMMAND_HANDSHAKE_ATTEMPTS && elapsedMillis < COMMAND_HANDSHAKE_TIMEOUT_MS
 
+internal fun tunnelWatchdogIntervalMillis(isInteractive: Boolean, consecutiveFailures: Int): Long =
+    if (isInteractive || consecutiveFailures > 0) 30_000L else 5 * 60_000L
+
 internal const val NETWORK_CHANGE_DEBOUNCE_MS = 350L
 internal const val MAX_COMMAND_HANDSHAKE_ATTEMPTS = 20
 internal const val COMMAND_HANDSHAKE_RETRY_DELAY_MS = 100L

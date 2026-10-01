@@ -418,6 +418,8 @@ private fun WarpyApp(viewModel: MainViewModel = viewModel()) {
         )
 
         val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) viewModel.setUiVisible(true)
+            if (event == Lifecycle.Event.ON_STOP) viewModel.setUiVisible(false)
             if (event == Lifecycle.Event.ON_RESUME) {
                 mainHandler.post(deferredStatusQuery)
                 viewModel.checkForUpdates(silent = true)
@@ -429,6 +431,7 @@ private fun WarpyApp(viewModel: MainViewModel = viewModel()) {
 
         onDispose {
             active = false
+            viewModel.setUiVisible(false)
             mainHandler.removeCallbacks(deferredConfigBuild)
             mainHandler.removeCallbacks(deferredStatusQuery)
             lifecycleOwner.lifecycle.removeObserver(observer)

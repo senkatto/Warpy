@@ -9,12 +9,25 @@ import com.warpy.app.vpn.isHandoverCandidatePhysicalNetwork
 import com.warpy.app.vpn.isUsablePhysicalNetwork
 import com.warpy.app.vpn.physicalNetworkPriority
 import com.warpy.app.vpn.shouldRetryCommandHandshake
+import com.warpy.app.vpn.tunnelWatchdogIntervalMillis
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ConnectionRecoveryPolicyTest {
+    @Test
+    fun `healthy screen off tunnel uses at most twelve scheduled probes an hour`() {
+        val interval = tunnelWatchdogIntervalMillis(isInteractive = false, consecutiveFailures = 0)
+        assertEquals(12L, 3_600_000L / interval)
+    }
+
+    @Test
+    fun `interactive and failed tunnels keep prompt watchdog recovery`() {
+        assertEquals(30_000L, tunnelWatchdogIntervalMillis(true, 0))
+        assertEquals(30_000L, tunnelWatchdogIntervalMillis(false, 1))
+    }
+
     @Test
     fun `only a validated usable physical network is accepted`() {
         assertTrue(

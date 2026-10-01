@@ -23,12 +23,16 @@ import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.PowerManager
 import android.os.SystemClock
 import android.system.ErrnoException
 import android.system.OsConstants
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import com.warpy.app.MainActivity
 import com.warpy.app.data.SettingsStore
 import com.warpy.app.localization.WarpyLocalization
@@ -130,6 +134,18 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     @Volatile private var closingCore = false
     @Volatile private var coreResourcesOpen = false
     @Volatile private var serviceDestroyed = false
+    @Volatile private var uiVisible = false
+    private val uiLifecycleObserver = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            uiVisible = true
+            refreshTrafficStatsSubscription()
+        }
+
+        override fun onStop(owner: LifecycleOwner) {
+            uiVisible = false
+            refreshTrafficStatsSubscription()
+        }
+    }
     private var lastWakeProbeAt = 0L
     private var lastScreenOffAt = 0L
     private var networkMonitor: NetworkObserver? = null
@@ -139,6 +155,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     private val networkChangeJobOwner = CancellableJobOwner(serviceScope)
     private val serviceHandler = Handler(Looper.getMainLooper())
     private val connectivity by lazy { getSystemService(ConnectivityManager::class.java) }
+    private val powerManager by lazy { getSystemService(PowerManager::class.java) }
     private val dnsExecutor: ExecutorService = Executors.newCachedThreadPool()
     private val secureRandom = SecureRandom()
     private val tunnelValidator: TunnelValidator = HttpTunnelValidator()
@@ -159,6 +176,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         migrateLegacySavedConfig()
         ensureRuleSetExists()
         cancelKeepAlive()
+        ProcessLifecycleOwner.get().lifecycle.addObserver(uiLifecycleObserver)
     }
 
     @Synchronized
@@ -698,7 +716,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private fun claimStatusClient(client: com.hiddify.core.libbox.CommandClient): Boolean =
         synchronized(coreResourceLock) {
-            if (!coreResourcesOpen || serviceDestroyed || statusClient != null) {
+            if (!coreResourcesOpen || serviceDestroyed || !uiVisible || statusClient != null) {
                 false
             } else {
                 statusClient = client
@@ -824,6 +842,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         val preserveTerminalError = vpnState == VpnState.Error
         val lastSnapshot = sessionRuntime?.snapshot() ?: VpnSessionSnapshot()
         serviceDestroyed = true
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(uiLifecycleObserver)
         cancelWakeProbeWork()
         serviceHandler.removeCallbacksAndMessages(null)
         sessionRuntime?.close()
@@ -1603,6 +1622,23 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
 
     private fun startStatusUpdates() {
         stopStatusUpdates()
+        if (uiVisible) startTrafficStats()
+        startTunnelWatchdog()
+    }
+
+    private fun refreshTrafficStatsSubscription() {
+        serviceScope.launch {
+            stateMutex.withLock {
+                if (uiVisible && vpnState == VpnState.Connected && commandServer != null) {
+                    if (statusClient == null) startTrafficStats()
+                } else {
+                    stopTrafficStats()
+                }
+            }
+        }
+    }
+
+    private fun startTrafficStats() {
         val client = Libbox.newCommandClient(
             TunnelStatusHandler(),
             CommandClientOptions().apply {
@@ -1616,19 +1652,24 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
                 runCatching { client.disconnect() }
                 return
             }
+            Log.i(TAG, "Traffic statistics resumed for visible UI")
         }.onFailure { error ->
             runCatching { client.disconnect() }
             Log.w(TAG, "sing-box traffic statistics are unavailable", error)
         }
-        startTunnelWatchdog()
     }
 
     private fun stopStatusUpdates() {
         tunnelWatchdogJobOwner.cancel()
+        stopTrafficStats()
+    }
+
+    private fun stopTrafficStats() {
         val client = synchronized(coreResourceLock) {
             statusClient.also { statusClient = null }
         }
         runCatching { client?.disconnect() }
+        if (client != null) Log.i(TAG, "Traffic statistics paused in background")
     }
 
     private fun startTunnelWatchdog() {
@@ -1636,7 +1677,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         tunnelWatchdogJobOwner.launch {
             var consecutiveFailures = 0
             while (currentCoroutineContext().isActive) {
-                delay(TUNNEL_WATCHDOG_INTERVAL_MS)
+                delay(tunnelWatchdogIntervalMillis(powerManager.isInteractive, consecutiveFailures))
                 if (serviceDestroyed ||
                     !loadShouldBeRunning() ||
                     vpnState != VpnState.Connected ||
@@ -1695,7 +1736,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         override fun writeGroups(groups: OutboundGroupIterator?) = Unit
         override fun writeLogs(logs: LogIterator?) = Unit
         override fun writeStatus(message: StatusMessage?) {
-            if (message == null) return
+            if (message == null || !uiVisible) return
             sendBroadcast(
                 Intent(ACTION_STATS)
                     .setPackage(packageName)
@@ -2002,7 +2043,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         private const val RECOVERY_PROBE_TIMEOUT_MS = 2500
         private const val CONNECTION_RESET_SETTLE_MS = 350L
         private const val HYSTERIA_RECOVERY_SETTLE_MS = 1500L
-        private const val TUNNEL_WATCHDOG_INTERVAL_MS = 30_000L
         private const val TUNNEL_WATCHDOG_PROBE_RETRIES = 1
         private const val TUNNEL_WATCHDOG_PROBE_TIMEOUT_MS = 2_000
         private const val TUNNEL_WATCHDOG_FAILURES = 2

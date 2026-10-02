@@ -83,3 +83,53 @@ The copied installer is 20.96 MiB. Its SHA-256, identical to the build output, i
 ```
 
 The corresponding updater signature is present beside the NSIS build output.
+
+## CPU regression repair — 2 October 2026
+
+The installed native UI consumed 9.84 CPU seconds during a 10.04-second sample
+while open. The native window thread accounted for nearly all of that work.
+An isolated preview of the same executable also occupied approximately one
+logical processor. The earlier hidden-window measurement did not exercise the
+continuous visible animation and therefore missed this regression.
+
+`getElementById` performed a full selector traversal for every lookup, and
+`querySelector` traversed all descendants even after finding its first match.
+Each animation frame also serialized unchanged SVG icons and inspected every
+retained element for removal. The repair indexes IDs until the tree or IDs
+change, stops first-match searches immediately, caches SVG markup until its
+attributes or tree change, and prunes detached elements after tree changes.
+Drawing coordinates, particle animation, controller actions and VPN behavior
+are unchanged.
+
+Verification:
+
+- 125 JavaScript tests passed, including ID cache invalidation, first-match
+  traversal and SVG cache invalidation. Rust: 69 passed, two ignored; the manual
+  frame timing test was also run explicitly. The legacy `cargo check` passed.
+- A deterministic comparison with the prior shim and scene builder produced
+  identical drawing commands and hit areas for three main-screen animation
+  frames and nine dialog screens. The existing Rust render test also generated
+  the main, profiles, settings, tunneling, sharing and import snapshots.
+- In the same actual QuickJS timing fixture, mean scene construction fell from
+  944.09 ms to 5.40 ms. These are unoptimized test-build measurements of 60
+  frames, not a measurement of display presentation FPS.
+- Separate release previews were sampled after a 15-second warmup. The old
+  visible preview used 10.00 CPU seconds over 10.00 seconds; the repaired visible
+  preview used 2.25 CPU seconds over 10.01 seconds. That is 22.47% of one logical
+  processor, approximately 1.40% of total CPU on this 16-logical-processor PC.
+  The hidden preview used 0.047 CPU seconds over 10.01 seconds and 33.73 MiB of
+  working memory. These previews exclude the VPN service and sing-box.
+- Previews spawned no child processes and preserved the protected settings
+  file hash. The running VPN service and core retained their original PIDs.
+
+The updater-signed 1.0.7 installer was rebuilt and copied to
+`D:\Sync\VetomenAPK\Warpy-setup.exe`. Its updater signature was independently
+verified against the configured public key. Its SHA-256 is:
+
+```text
+8DD9DF680A3026268EBDA1F1ECBEFD13143632504685FC737B82A9D098DFA313
+```
+
+It has not been installed on the active PC: the installer's pre-install hook
+stops the VPN service, and the user requested preserving the active connection.
+No version bump, publication or server change was made.

@@ -3,6 +3,9 @@
 const nativeById = id => document.getElementById(id);
 const nativeVisible = id => !nativeById(id)?.classList.contains('hidden');
 const nativeText = id => nativeById(id)?.textContent || '';
+const nativeLogo = document.querySelector('.logo');
+const nativeSvgSources = new WeakMap();
+let nativePrunedTreeVersion = -1;
 let nativeScene = { ops: [], hits: [], scrolls: [] };
 let nativeHover = 0;
 let nativeFocus = 0;
@@ -23,8 +26,13 @@ function nativeMeasure(text, size, weight = 400) {
 function nativeSvg(element, x, y, w, h, color = '#ccc') {
   const svg = element?.tagName === 'SVG' ? element : element?.querySelector('svg');
   if (svg) {
-    let source = nativeMarkup(svg).replace(/currentColor/g, color);
-    if (!svg.getAttribute('xmlns')) source = source.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
+    let cached = nativeSvgSources.get(svg);
+    if (!cached || cached.version !== nativeTreeVersion || cached.color !== color) {
+      let source = nativeMarkup(svg).replace(/currentColor/g, color);
+      if (!svg.getAttribute('xmlns')) source = source.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
+      cached = { version: nativeTreeVersion, color, source }; nativeSvgSources.set(svg, cached);
+    }
+    const source = cached.source;
     nativeScene.ops.push({ kind: 'svg', source, x, y, w, h });
   }
 }
@@ -111,7 +119,7 @@ function nativeMain() {
 }
 function nativeTopBar() {
   if (nativeVisible('overlay-settings')) return;
-  nativeSvg(document.querySelector('.logo'), 40, 47, 109, 20, '#fff');
+  nativeSvg(nativeLogo, 40, 47, 109, 20, '#fff');
   ['btn-add', 'btn-speed', 'btn-settings', 'win-min', 'win-close'].forEach((id, index) => {
     const el = nativeById(id); const x = 178 + index * 42;
     nativeRect(x, 40, 34, 34, el.uid === nativeHover ? id === 'win-close' ? '#ff4d4d' : '#2a2a2c' : '#1c1c1e', 17);
@@ -379,7 +387,10 @@ globalThis.__nativeBuildScene = () => {
     nativeRect(60, 558, 300, 76, '#29292c', 10);
     nativeLabel(nativeTooltip, 72, 566, 276, 60, 12, '#eee', 400, 'left', true);
   }
-  for (const [uid, element] of nativeElements) if (!element.isConnected) nativeElements.delete(uid);
+  if (nativePrunedTreeVersion !== nativeTreeVersion) {
+    for (const [uid, element] of nativeElements) if (!element.isConnected) nativeElements.delete(uid);
+    nativePrunedTreeVersion = nativeTreeVersion;
+  }
   nativeDirty = false;
   return JSON.stringify(nativeScene);
 };

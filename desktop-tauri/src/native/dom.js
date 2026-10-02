@@ -2,6 +2,9 @@
 // This small retained tree holds labels, input values and event handlers only.
 globalThis.window = globalThis;
 const nativeElements = new Map();
+const nativeIds = new Map();
+let nativeIdsDirty = true;
+let nativeTreeVersion = 0;
 let nativeDirty = true;
 let nativeSequence = 1;
 const nativeTimers = new Map();
@@ -9,6 +12,7 @@ const nativePending = new Map();
 const nativeEvents = new Map();
 const nativeStreams = new Map();
 const markNativeDirty = () => { nativeDirty = true; };
+const markNativeTreeDirty = () => { nativeIdsDirty = true; nativeTreeVersion++; markNativeDirty(); };
 
 class NativeEvent {
   constructor(type, fields = {}) { this.type = type; Object.assign(this, fields); }
@@ -95,9 +99,9 @@ class NativeElement extends NativeEventTarget {
     this.scrollTop = 0;
   }
   get id() { return this.attributes.id || ''; }
-  set id(value) { this.attributes.id = value; }
+  set id(value) { this.setAttribute('id', value); }
   get className() { return this.attributes.class || ''; }
-  set className(value) { this.attributes.class = value; markNativeDirty(); }
+  set className(value) { if (this.attributes.class !== value) nativeTreeVersion++; this.attributes.class = value; markNativeDirty(); }
   get value() { return this.nativeValue || ''; }
   set value(value) { this.nativeValue = String(value ?? ''); markNativeDirty(); }
   get textContent() { return this.children.map(child => child.textContent).join(''); }
@@ -110,20 +114,22 @@ class NativeElement extends NativeEventTarget {
   get isConnected() { return this === document || Boolean(this.parentNode?.isConnected); }
   appendChild(child) {
     if (child.parentNode) child.remove();
-    child.parentNode = this; this.children.push(child); markNativeDirty(); return child;
+    child.parentNode = this; this.children.push(child); markNativeTreeDirty(); return child;
   }
   append(...children) { for (const child of children) this.appendChild(typeof child === 'string' ? new NativeText(child) : child); }
   replaceChildren(...children) {
     for (const child of this.children) child.parentNode = null;
-    this.children = []; this.append(...children); markNativeDirty();
+    this.children = []; this.append(...children); markNativeTreeDirty();
   }
   remove() {
     if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(child => child !== this);
-    this.parentNode = null; markNativeDirty();
+    this.parentNode = null; markNativeTreeDirty();
   }
-  removeChild(child) { this.children = this.children.filter(value => value !== child); child.parentNode = null; markNativeDirty(); return child; }
+  removeChild(child) { this.children = this.children.filter(value => value !== child); child.parentNode = null; markNativeTreeDirty(); return child; }
   setAttribute(key, value) {
+    if (this.attributes[key] !== String(value)) nativeTreeVersion++;
     this.attributes[key] = String(value);
+    if (key === 'id') nativeIdsDirty = true;
     if (key.startsWith('data-')) this.dataset[key.slice(5).replace(/-([a-z])/g, (_, ch) => ch.toUpperCase())] = String(value);
     markNativeDirty();
   }
@@ -135,7 +141,14 @@ class NativeElement extends NativeEventTarget {
       visit(child);
     } }; visit(this); return found;
   }
-  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  querySelector(selector) {
+    const alternatives = selector.split(',');
+    const visit = node => { for (const child of node.children || []) {
+      if (alternatives.some(value => nativeSelectorMatches(child, value))) return child;
+      const found = visit(child); if (found) return found;
+    } return null; };
+    return visit(this);
+  }
   closest(selector) {
     if (selector.split(',').some(value => nativeSelectorMatches(this, value))) return this;
     return this.parentNode?.closest(selector) || null;
@@ -178,7 +191,17 @@ function nativeParseMarkup(markup) {
   return [...root.children];
 }
 globalThis.document = nativeFromTree(__warpyTree);
-document.getElementById = id => document.querySelector(`#${id}`);
+document.getElementById = id => {
+  if (nativeIdsDirty) {
+    nativeIds.clear();
+    const visit = node => { for (const child of node.children || []) {
+      if (child.id && !nativeIds.has(child.id)) nativeIds.set(child.id, child);
+      visit(child);
+    } }; visit(document);
+    nativeIdsDirty = false;
+  }
+  return nativeIds.get(String(id)) || null;
+};
 document.createElement = tag => new NativeElement(tag);
 document.createElementNS = (_, tag) => new NativeElement(tag);
 document.createTextNode = text => new NativeText(text);

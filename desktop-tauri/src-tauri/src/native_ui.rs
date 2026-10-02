@@ -368,7 +368,60 @@ mod tests {
     }
 
     #[test]
-    fn actual_quickjs_engine_runs_the_controller_and_draws_settings() {
+    #[ignore = "manual native frame performance measurement"]
+    fn native_connected_frame_timings() {
+        use windows::{core::w, Win32::{System::Com::*, UI::WindowsAndMessaging::*}};
+        let (_runtime, context) = native_test_runtime();
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let hwnd = CreateWindowExW(WINDOW_EX_STYLE::default(), w!("STATIC"), w!("Warpy frame benchmark"),
+                WS_POPUP, 0, 0, 420, 720, None, None, None, None).unwrap();
+            let flags = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("flags");
+            let mut painter = painter::Painter::new(hwnd, 420, 720, 96, flags).unwrap();
+            let mut timings = Vec::new();
+            context.with(|ctx| {
+                let clock = Instant::now();
+                ctx.globals().set("__nativeBenchNow", Function::new(ctx.clone(), move || clock.elapsed().as_secs_f64()*1000.0).unwrap()).unwrap();
+                ctx.eval::<(),_>(r#"
+                    globalThis.__nativeBenchStages = {};
+                    for (const name of ['nativeMain', 'nativeTopBar', 'nativeOtherDialogs']) {
+                        const original = globalThis[name];
+                        globalThis[name] = (...args) => {
+                            const start = __nativeBenchNow();
+                            const result = original(...args);
+                            __nativeBenchStages[name] = __nativeBenchNow() - start;
+                            return result;
+                        };
+                    }
+                "#).unwrap();
+                for frame in 0..60 {
+                    let start = Instant::now();
+                    ctx.eval::<(),_>(format!("__clock={}; __nativeTick();", 5000 + frame * 34)).unwrap();
+                    let tick = start.elapsed().as_secs_f64() * 1000.0;
+                    let start = Instant::now();
+                    let json: String = ctx.eval("__nativeBuildScene()").unwrap();
+                    let scene = start.elapsed().as_secs_f64() * 1000.0;
+                    let start = Instant::now();
+                    let parsed = serde_json::from_str(&json).unwrap();
+                    let decode = start.elapsed().as_secs_f64() * 1000.0;
+                    let start = Instant::now();
+                    painter.paint(&parsed).unwrap();
+                    let paint = start.elapsed().as_secs_f64()*1000.0;
+                    let stages: String = ctx.eval("JSON.stringify(__nativeBenchStages)").unwrap();
+                    timings.push(json!({"tickMs":tick,"sceneMs":scene,"decodeMs":decode,"paintMs":paint,"stages":serde_json::from_str::<Value>(&stages).unwrap()}));
+                }
+            });
+            drop(painter);
+            let _ = DestroyWindow(hwnd);
+            let output = std::env::var_os("WARPY_NATIVE_BENCH_OUTPUT").map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.artifacts/native-ui-preview/frame-timings.json"));
+            fs::create_dir_all(output.parent().unwrap()).unwrap();
+            fs::write(&output, serde_json::to_vec_pretty(&timings).unwrap()).unwrap();
+            println!("Native frame timings: {}", output.display());
+        }
+    }
+
+    fn native_test_runtime() -> (Runtime, Context) {
         let runtime = Runtime::new().unwrap();
         runtime.set_max_stack_size(2 * 1024 * 1024);
         let context = Context::full(&runtime).unwrap();
@@ -410,6 +463,12 @@ mod tests {
                 }
             "#).unwrap());
         }
+        (runtime, context)
+    }
+
+    #[test]
+    fn actual_quickjs_engine_runs_the_controller_and_draws_settings() {
+        let (_runtime, context) = native_test_runtime();
         context.with(|ctx| {
             let errors: String = ctx.eval("__errors.filter(value => /TypeError|ReferenceError/.test(value)).join('\\n')").unwrap();
             assert!(errors.is_empty(),"{errors}");

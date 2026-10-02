@@ -59,6 +59,61 @@ test('native controller initializes and renders the original dimensions without 
   assert.equal(shell.errors.some(error => /TypeError|ReferenceError/.test(error)), false, shell.errors.join('\n'));
 });
 
+test('native ID lookup avoids selector traversal and follows tree and ID changes', async () => {
+  const shell = await nativeShell(settings);
+  shell.run(`
+    const power = document.getElementById('power-btn');
+    document.querySelector = () => { throw new Error('Full tree selector traversal'); };
+    for (let i = 0; i < 100; i++) {
+      if (document.getElementById('power-btn') !== power) throw new Error('Lost static ID');
+    }
+    const parent = document.createElement('div');
+    const first = document.createElement('span'); first.id = 'native-test-id';
+    const second = document.createElement('span'); second.id = 'native-test-id';
+    parent.append(first, second); document.body.append(parent);
+    if (document.getElementById('native-test-id') !== first) throw new Error('Wrong duplicate ID order');
+    first.remove();
+    if (document.getElementById('native-test-id') !== second) throw new Error('Stale removed ID');
+    second.setAttribute('id', 'native-renamed-id');
+    if (document.getElementById('native-test-id') !== null) throw new Error('Stale renamed ID');
+    if (document.getElementById('native-renamed-id') !== second) throw new Error('Missing renamed ID');
+    parent.replaceChildren(first);
+    if (document.getElementById('native-renamed-id') !== null) throw new Error('Stale replaced child');
+    if (document.getElementById('native-test-id') !== first) throw new Error('Missing reattached child');
+    parent.removeChild(first);
+    if (document.getElementById('native-test-id') !== null) throw new Error('Stale detached child');
+    parent.remove();
+  `);
+});
+
+test('native first selector match stops before unrelated subtrees', async () => {
+  const shell = await nativeShell(settings);
+  shell.run(`
+    const parent = document.createElement('div');
+    const first = document.createElement('span'); first.id = 'native-first-match';
+    const later = document.createElement('div');
+    Object.defineProperty(later, 'children', { get() { throw new Error('Visited later subtree'); } });
+    parent.append(first, later);
+    if (parent.querySelector('#native-first-match') !== first) throw new Error('Wrong first match');
+  `);
+});
+
+test('native SVG cache preserves changed icon markup and colors', async () => {
+  const shell = await nativeShell(settings);
+  shell.scene();
+  shell.run(`
+    const svg = nativeLogo.querySelector('svg');
+    const originalMarkup = nativeMarkup;
+    nativeMarkup = () => { throw new Error('Rebuilt unchanged SVG'); };
+    nativeSvg(svg, 0, 0, 109, 20, '#fff');
+    nativeMarkup = originalMarkup;
+    svg.setAttribute('data-native-test', 'changed');
+    nativeSvg(svg, 0, 0, 109, 20, '#123456');
+    if (!nativeScene.ops.at(-1).source.includes('data-native-test="changed"')) throw new Error('Stale SVG attributes');
+    if (nativeScene.ops.at(-1).source.includes('currentColor')) throw new Error('Stale SVG color');
+  `);
+});
+
 test('every original dialog is reachable and produces a native scene', async () => {
   const shell = await nativeShell(settings);
   for (const overlay of ['profiles', 'settings', 'language', 'share', 'add', 'speedtest', 'running-apps', 'confirm', 'message', 'settings-unsaved']) {

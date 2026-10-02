@@ -657,6 +657,15 @@ function drawFrame(timestamp) {
   const connectionStatus = uiConnectionStatus();
   const isParticlesActive = connectionStatus === 'connected' || connectionStatus === 'connecting';
 
+  if (ctx.nativeParticleFrame && isParticlesActive) {
+    if (!animStart) animStart = timestamp;
+    const elapsed = (timestamp - animStart) / 1000;
+    if (connectionStatus === 'connected' && connectedStart === null) connectedStart = elapsed;
+    ctx.nativeParticleFrame(animStart, connectedStart, connectionStatus === 'connected');
+    rafId = null;
+    return;
+  }
+
   // Throttle particles loop to ~30fps (wait at least 30ms between draws)
   // But let other transition animations (like disconnect) run at full 60fps
   if (isParticlesActive && lastFrameTime && timestamp - lastFrameTime < 30) {
@@ -800,7 +809,10 @@ function drawFrame(timestamp) {
 
 
 function startAnimation() {
-  if (animActive) return;
+  if (animActive) {
+    if (ctx.nativeParticleFrame && !rafId) rafId = requestAnimationFrame(drawFrame);
+    return;
+  }
   animActive = true;
   animStart = null;
   connectedStart = null;

@@ -43,6 +43,7 @@ async function nativeShell(settings = {}, runtimeStatus = 'Stopped') {
   }
   await settle();
   return { context, errors, calls, history, network, windows, settle,
+    setRuntimeStatus: value => { runtimeStatus = value; },
     run: code => vm.runInContext(code, context),
     advance: async milliseconds => { now += milliseconds; context.__nativeTick(); await settle(); },
     scene: () => JSON.parse(context.__nativeBuildScene()),
@@ -155,6 +156,52 @@ test('hidden native window stops particle frames and metric traffic', async () =
   assert.equal(shell.network.length, 0);
   assert.equal(shell.run("document.hidden"), true);
   assert.ok(shell.run("[...nativeTimers.values()].every(timer => timer.at > performance.now())"));
+});
+
+test('native particles use a retained animation without continuous controller frames', async () => {
+  const shell = await nativeShell(settings, 'Connected');
+  await shell.advance(34);
+  const frame = shell.scene().ops.find(op => op.kind === 'particles');
+  assert.ok(frame);
+  assert.equal(frame.connected, true);
+  assert.equal(frame.connected_at, 0);
+  const particleCanvas = shell.run("document.getElementById('particles').nativeCanvas");
+  const retained = particleCanvas.ops;
+  await shell.advance(34);
+  assert.equal(particleCanvas.ops, retained);
+  shell.run("document.getElementById('overlay-settings').classList.remove('hidden')");
+  assert.equal(shell.scene().ops.some(op => op.kind === 'particles' || op.spin), false);
+});
+
+test('native connecting spinner advances in the painter and cancellation clears particles', async () => {
+  const shell = await nativeShell(settings, 'Starting');
+  await shell.advance(34);
+  assert.ok(shell.scene().ops.some(op => op.spin));
+  assert.equal(shell.scene().ops.find(op => op.kind === 'particles').connected, false);
+  shell.context.__nativePointer('click', 210, 274);
+  await shell.settle();
+  await shell.advance(40);
+  assert.equal(shell.scene().ops.some(op => op.kind === 'particles' || op.spin), false);
+});
+
+test('native particles retain their phase across connecting, connected and visibility changes', async () => {
+  const shell = await nativeShell(settings, 'Starting');
+  await shell.advance(34);
+  const started = shell.scene().ops.find(op => op.kind === 'particles').started;
+  shell.setRuntimeStatus('Connected');
+  await shell.advance(2100);
+  await shell.advance(34);
+  const connected = shell.scene().ops.find(op => op.kind === 'particles');
+  assert.equal(connected.started, started);
+  assert.equal(connected.connected, true);
+  assert.ok(connected.connected_at > 0);
+  shell.context.__nativeVisibility(false);
+  await shell.advance(10_000);
+  shell.context.__nativeVisibility(true);
+  await shell.advance(34);
+  const resumed = shell.scene().ops.find(op => op.kind === 'particles');
+  assert.equal(resumed.started, started);
+  assert.equal(resumed.connected_at, connected.connected_at);
 });
 
 test('native network health check preserves received byte count and cancellation', async () => {

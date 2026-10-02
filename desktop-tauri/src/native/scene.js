@@ -86,7 +86,7 @@ function nativeMain() {
     if (connected) nativeLabel(nativeById('status-alert').classList.contains('visible') ? nativeText('status-alert').toUpperCase() : nativeText('uptime'), 124, 258, 172, 32, 15, '#00c07f', 600, 'center');
     if (connecting) {
       nativeScene.ops.push({kind:'svg',source:'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><circle cx="25" cy="25" r="20" fill="none" stroke="white" stroke-opacity=".04" stroke-width="3"/></svg>',x:182,y:246,w:56,h:56});
-      nativeScene.ops.push({kind:'svg',source:'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><circle cx="25" cy="25" r="20" fill="none" stroke="#ffa726" stroke-linecap="round" stroke-dasharray="90 150" stroke-width="3"/></svg>',x:182,y:246,w:56,h:56,rotation:performance.now()/1400*Math.PI*2});
+      nativeScene.ops.push({kind:'svg',source:'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><circle cx="25" cy="25" r="20" fill="none" stroke="#ffa726" stroke-linecap="round" stroke-dasharray="90 150" stroke-width="3"/></svg>',x:182,y:246,w:56,h:56,spin:true});
     }
   }
   const infoHeight = connected ? 139 : empty ? 49 : 89;
@@ -363,7 +363,7 @@ function nativeOtherDialogs() {
 globalThis.__nativeBuildScene = () => {
   nativeScene = { ops: [], hits: [], scrolls: [] };
   nativeRect(20, 20, 380, 680, '#09090b', 36);
-  nativeMain();
+  if (!nativeVisible('overlay-settings')) nativeMain();
   nativeTopBar();
   if (nativeVisible('update-banner')) {
     nativeRect(40, 90, 340, 72, '#17191a', 14);

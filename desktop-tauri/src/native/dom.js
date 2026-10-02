@@ -317,6 +317,10 @@ globalThis.__nativeFetchEvent = (id, event) => {
 class NativeCanvas {
   constructor() { this.ops = []; this.path = []; this.fillStyle = '#fff'; this.strokeStyle = '#fff'; this.lineWidth = 1; }
   scale() {} clearRect() { this.ops = []; markNativeDirty(); }
+  nativeParticleFrame(started, connectedAt, connected) {
+    this.ops = [{ kind: 'particles', x: 0, y: 0, started, connected_at: connectedAt, connected }];
+    markNativeDirty();
+  }
   beginPath() { this.path = []; }
   arc(x, y, r) { this.path.push({ kind: 'ellipse', x: x - r, y: y - r, w: r * 2, h: r * 2 }); }
   moveTo(x, y) { this.point = { x, y }; }

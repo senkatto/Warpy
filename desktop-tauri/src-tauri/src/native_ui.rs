@@ -1,4 +1,5 @@
 mod painter;
+mod particles;
 mod window;
 
 use super::*;
@@ -43,6 +44,7 @@ pub(super) struct Controller {
     context: Context,
     receiver: mpsc::Receiver<Message>,
     app: tauri::AppHandle,
+    clock: Instant,
 }
 
 impl Controller {
@@ -51,11 +53,11 @@ impl Controller {
         runtime.set_memory_limit(96 * 1024 * 1024);
         runtime.set_max_stack_size(2 * 1024 * 1024);
         let context = Context::full(&runtime).map_err(|e| e.to_string())?;
+        let clock = Instant::now();
         let requests: Arc<Mutex<HashMap<u32, tokio::sync::oneshot::Sender<()>>>> = Arc::new(Mutex::new(HashMap::new()));
         context.with(|ctx| -> Result<(), rquickjs::Error> {
             let globals = ctx.globals();
             globals.set("__nativeMeasureText", Function::new(ctx.clone(),painter::Painter::measure_text))?;
-            let clock = Instant::now();
             globals.set("__nativeNow", Function::new(ctx.clone(), move || clock.elapsed().as_secs_f64() * 1000.0))?;
             let log_app = app.clone();
             globals.set("__nativeLog", Function::new(ctx.clone(), move |message: String| log_message(log_app.clone(), message)))?;
@@ -126,7 +128,7 @@ impl Controller {
             }
             Ok(())
         }).map_err(|e| e.to_string())?;
-        Ok(Self { runtime, context, receiver, app })
+        Ok(Self { runtime, context, receiver, app, clock })
     }
 
     pub(super) fn evaluate(&self, script: &str) {
@@ -179,6 +181,7 @@ impl Controller {
     pub(super) fn next_wake(&self) -> u32 {
         self.context.with(|ctx| ctx.eval::<f64, _>("__nativeNextWake()").unwrap_or(1000.0)) as u32
     }
+    fn now(&self) -> f64 { self.clock.elapsed().as_secs_f64()*1000.0 }
 }
 
 fn encode<T: serde::Serialize>(value: T) -> Result<Value, String> { serde_json::to_value(value).map_err(|e| e.to_string()) }
@@ -371,7 +374,7 @@ mod tests {
     #[ignore = "manual native frame performance measurement"]
     fn native_connected_frame_timings() {
         use windows::{core::w, Win32::{System::Com::*, UI::WindowsAndMessaging::*}};
-        let (_runtime, context) = native_test_runtime();
+        let (_runtime, context) = native_test_runtime("Connected");
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
             let hwnd = CreateWindowExW(WINDOW_EX_STYLE::default(), w!("STATIC"), w!("Warpy frame benchmark"),
@@ -405,7 +408,7 @@ mod tests {
                     let parsed = serde_json::from_str(&json).unwrap();
                     let decode = start.elapsed().as_secs_f64() * 1000.0;
                     let start = Instant::now();
-                    painter.paint(&parsed).unwrap();
+                    painter.paint(&parsed,(5000 + frame * 34) as f64).unwrap();
                     let paint = start.elapsed().as_secs_f64()*1000.0;
                     let stages: String = ctx.eval("JSON.stringify(__nativeBenchStages)").unwrap();
                     timings.push(json!({"tickMs":tick,"sceneMs":scene,"decodeMs":decode,"paintMs":paint,"stages":serde_json::from_str::<Value>(&stages).unwrap()}));
@@ -421,11 +424,12 @@ mod tests {
         }
     }
 
-    fn native_test_runtime() -> (Runtime, Context) {
+    fn native_test_runtime(status: &str) -> (Runtime, Context) {
         let runtime = Runtime::new().unwrap();
         runtime.set_max_stack_size(2 * 1024 * 1024);
         let context = Context::full(&runtime).unwrap();
         context.with(|ctx| {
+            ctx.globals().set("__testStatus", status).unwrap();
             ctx.globals().set("__nativeMeasureText",Function::new(ctx.clone(),painter::Painter::measure_text).unwrap()).unwrap();
             ctx.eval::<(),_>(r#"
                 globalThis.__requests = []; globalThis.__errors = [];
@@ -453,7 +457,7 @@ mod tests {
                 for (const request of __requests.splice(0)) {
                     let value = null;
                     if (request.name === 'load_settings') value = JSON.stringify({lang:'ru',active:0,profiles:[{protocol:'vless',name:'SNKT',host:'192.0.2.1',port:2053,uuid:'00000000-0000-4000-8000-000000000001',security:'reality',sni:'example.com',pbk:'test'}]});
-                    if (request.name === 'get_vpn_runtime_snapshot') value = {status:'Connected',desiredRunning:true};
+                    if (request.name === 'get_vpn_runtime_snapshot') value = {status:__testStatus,desiredRunning:true};
                     if (request.name === 'get_vpn_started_at') value = Date.now()-24342000;
                     if (request.name === 'get_vpn_network_stats') value = {available:false};
                     if (request.name === 'probe_profiles') value = [];
@@ -467,8 +471,34 @@ mod tests {
     }
 
     #[test]
+    fn native_particles_match_the_original_javascript_animation() {
+        for status in ["Connected","Starting"] {
+            let (_runtime, context) = native_test_runtime(status);
+            context.with(|ctx| {
+                ctx.eval::<(),_>("delete NativeCanvas.prototype.nativeParticleFrame;").unwrap();
+                for time in [1000,1180,1500,2500,4000,12000] {
+                    ctx.eval::<(),_>(format!("__clock={time}; __nativeTick();")).unwrap();
+                    let json: String = ctx.eval("JSON.stringify(document.getElementById('particles').nativeCanvas.ops)").unwrap();
+                    let reference: Vec<Value> = serde_json::from_str(&json).unwrap();
+                    let connected = status=="Connected";
+                    let dots: Vec<_> = particles::frame((time-1000) as f64/1000.0,if connected {Some(0.0)} else {None},connected).collect();
+                    assert_eq!(reference.len(),dots.len(),"{status} {time}: particle count differs");
+                    for (op,dot) in reference.iter().zip(dots) {
+                        let radius = op["w"].as_f64().unwrap()/2.0;
+                        let x = op["x"].as_f64().unwrap()+radius;
+                        let y = op["y"].as_f64().unwrap()+radius;
+                        assert!((x-dot.x).abs()<1e-7 && (y-dot.y).abs()<1e-7 && (radius-dot.radius).abs()<1e-7,"{status} {time}: geometry differs");
+                        let color: Vec<f64> = op["color"].as_str().unwrap().trim_start_matches("rgba(").trim_end_matches(')').split(',').map(|value|value.parse().unwrap()).collect();
+                        for channel in 0..4 { let expected = if channel<3 {color[channel]/255.0} else {color[channel]}; assert!((expected-dot.color[channel]).abs()<1e-7,"{status} {time}: color differs"); }
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
     fn actual_quickjs_engine_runs_the_controller_and_draws_settings() {
-        let (_runtime, context) = native_test_runtime();
+        let (_runtime, context) = native_test_runtime("Connected");
         context.with(|ctx| {
             let errors: String = ctx.eval("__errors.filter(value => /TypeError|ReferenceError/.test(value)).join('\\n')").unwrap();
             assert!(errors.is_empty(),"{errors}");
@@ -491,7 +521,8 @@ mod tests {
                 assert!(message.is_empty(),"Unexpected dialog in {name}: {message}");
                 let json: String = ctx.eval("__nativeBuildScene()").unwrap();
                 let scene = serde_json::from_str(&json).unwrap();
-                painter::Painter::snapshot(&scene,&directory.join(format!("{name}.png"))).unwrap();
+                let time: f64 = ctx.eval("__clock").unwrap();
+                painter::Painter::snapshot(&scene,&directory.join(format!("{name}.png")),time).unwrap();
             }
         });
     }

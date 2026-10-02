@@ -12,16 +12,19 @@ pub(super) struct Op {
     color: String, radius: f32, stroke: f32, rotation: f32,
     text: String, size: f32, weight: i32, align: String, wrap: bool, break_all: bool,
     source: String,
+    started: f64, connected_at: Option<f64>, connected: bool, spin: bool,
 }
 
 #[derive(Default, Deserialize)]
 pub(super) struct Scene { pub(super) ops: Vec<Op> }
+impl Scene { pub(super) fn animated(&self) -> bool { self.ops.iter().any(|op| op.kind=="particles" || op.spin) } }
 
 pub(super) struct Painter {
     target: ID2D1RenderTarget,
     write: IDWriteFactory,
     brush: ID2D1SolidColorBrush,
     fonts: HashMap<String, IDWriteTextFormat>,
+    layouts: HashMap<(String,String,u32,u32), IDWriteTextLayout>,
     images: HashMap<String, ID2D1Bitmap>,
     flags: PathBuf,
     dpi: f32,
@@ -47,19 +50,19 @@ impl Painter {
         unsafe {
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let target = factory.CreateHwndRenderTarget(&D2D1_RENDER_TARGET_PROPERTIES {
-                r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+                r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
                 pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode:D2D1_ALPHA_MODE_IGNORE },
                 dpiX: dpi as f32, dpiY: dpi as f32, ..Default::default()
-            }, &D2D1_HWND_RENDER_TARGET_PROPERTIES { hwnd, pixelSize: D2D_SIZE_U { width, height }, ..Default::default() })?;
+            }, &D2D1_HWND_RENDER_TARGET_PROPERTIES { hwnd, pixelSize: D2D_SIZE_U { width, height }, presentOptions:D2D1_PRESENT_OPTIONS_IMMEDIATELY })?;
             let target: ID2D1RenderTarget = target.cast()?;
             target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             let brush = target.CreateSolidColorBrush(&color("#fff"), None)?;
             let write = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            Ok(Self { target, write, brush, fonts:HashMap::new(), images:HashMap::new(), flags, dpi:dpi as f32 / 96.0 })
+            Ok(Self { target, write, brush, fonts:HashMap::new(), layouts:HashMap::new(), images:HashMap::new(), flags, dpi:dpi as f32 / 96.0 })
         }
     }
 
-    pub(super) fn paint(&mut self, scene: &Scene) -> windows::core::Result<()> {
+    pub(super) fn paint(&mut self, scene: &Scene, time_ms: f64) -> windows::core::Result<()> {
         unsafe {
             self.target.BeginDraw();
             self.target.Clear(Some(&D2D1_COLOR_F { r:0.0, g:0.0, b:0.0, a:0.0 }));
@@ -67,6 +70,13 @@ impl Painter {
                 let rect = D2D_RECT_F { left:op.x, top:op.y, right:op.x + op.w, bottom:op.y + op.h };
                 self.brush.SetColor(&color(&op.color));
                 match op.kind.as_str() {
+                    "particles" => {
+                        let elapsed = ((time_ms-op.started)/1000.0).max(0.0);
+                        for dot in super::particles::frame(elapsed, op.connected_at, op.connected) {
+                            self.brush.SetColor(&D2D1_COLOR_F { r:dot.color[0] as f32,g:dot.color[1] as f32,b:dot.color[2] as f32,a:dot.color[3] as f32 });
+                            self.target.FillEllipse(&D2D1_ELLIPSE { point:Vector2 { X:op.x+dot.x as f32,Y:op.y+dot.y as f32 },radiusX:dot.radius as f32,radiusY:dot.radius as f32 },&self.brush);
+                        }
+                    }
                     "rect" => {
                         let inset = op.stroke / 2.0;
                         let rounded = D2D1_ROUNDED_RECT { rect:D2D_RECT_F { left:rect.left+inset, top:rect.top+inset, right:rect.right-inset, bottom:rect.bottom-inset }, radiusX:(op.radius-inset).max(0.0), radiusY:(op.radius-inset).max(0.0) };
@@ -91,17 +101,24 @@ impl Painter {
                             if !op.wrap { format.SetTrimming(&trimming, &sign)?; }
                             self.fonts.insert(key.clone(), format);
                         }
-                        let text: Vec<u16> = op.text.encode_utf16().collect();
-                        self.target.DrawText(&text, &self.fonts[&key], &rect, &self.brush, D2D1_DRAW_TEXT_OPTIONS_CLIP, DWRITE_MEASURING_MODE_NATURAL);
+                        let layout_key = (op.text.clone(),key.clone(),op.w.to_bits(),op.h.to_bits());
+                        if !self.layouts.contains_key(&layout_key) {
+                            let text: Vec<u16> = op.text.encode_utf16().collect();
+                            let layout = self.write.CreateTextLayout(&text,&self.fonts[&key],op.w,op.h)?;
+                            if self.layouts.len()>=256 { self.layouts.clear(); }
+                            self.layouts.insert(layout_key.clone(),layout);
+                        }
+                        self.target.DrawTextLayout(Vector2 {X:op.x,Y:op.y},&self.layouts[&layout_key],&self.brush,D2D1_DRAW_TEXT_OPTIONS_CLIP);
                     }
                     "svg" | "image" => {
                         if let Some(bitmap) = self.bitmap(op) {
-                            if op.rotation != 0.0 {
-                                let (sin,cos) = op.rotation.sin_cos(); let cx=op.x+op.w/2.0; let cy=op.y+op.h/2.0;
+                            let rotation = if op.spin { (time_ms/1400.0*std::f64::consts::TAU) as f32 } else { op.rotation };
+                            if rotation != 0.0 {
+                                let (sin,cos) = rotation.sin_cos(); let cx=op.x+op.w/2.0; let cy=op.y+op.h/2.0;
                                 self.target.SetTransform(&Matrix3x2 { M11:cos,M12:sin,M21:-sin,M22:cos,M31:cx-cx*cos+cy*sin,M32:cy-cx*sin-cy*cos });
                             }
                             self.target.DrawBitmap(&bitmap, Some(&rect), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
-                            if op.rotation != 0.0 { self.target.SetTransform(&Matrix3x2 { M11:1.0,M22:1.0,..Default::default() }); }
+                            if rotation != 0.0 { self.target.SetTransform(&Matrix3x2 { M11:1.0,M22:1.0,..Default::default() }); }
                         }
                     }
                     "clip" => self.target.PushAxisAlignedClip(&rect, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE),
@@ -114,7 +131,7 @@ impl Painter {
     }
 
     #[cfg(test)]
-    pub(super) fn snapshot(scene: &Scene, destination: &std::path::Path) -> Result<(),String> {
+    pub(super) fn snapshot(scene: &Scene, destination: &std::path::Path, time_ms: f64) -> Result<(),String> {
         use windows::Win32::{Graphics::Imaging::*, System::Com::*};
         unsafe {
             let _ = CoInitializeEx(None,COINIT_APARTMENTTHREADED);
@@ -128,8 +145,8 @@ impl Painter {
             }).map_err(|e|e.to_string())?;
             target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             let brush = target.CreateSolidColorBrush(&color("#fff"),None).map_err(|e|e.to_string())?;
-            let mut painter = Self { target, brush, write:DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).map_err(|e|e.to_string())?, fonts:HashMap::new(), images:HashMap::new(), flags:PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("flags"), dpi:1.0 };
-            painter.paint(scene).map_err(|e|e.to_string())?;
+            let mut painter = Self { target, brush, write:DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).map_err(|e|e.to_string())?, fonts:HashMap::new(), layouts:HashMap::new(), images:HashMap::new(), flags:PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("flags"), dpi:1.0 };
+            painter.paint(scene,time_ms).map_err(|e|e.to_string())?;
             drop(painter);
             let lock = bitmap.Lock(&WICRect { X:0,Y:0,Width:420,Height:720 },WICBitmapLockRead.0 as u32).map_err(|e|e.to_string())?;
             let mut bytes = 0; let mut pointer = std::ptr::null_mut();

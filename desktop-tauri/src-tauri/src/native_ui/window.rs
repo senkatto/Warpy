@@ -2,11 +2,31 @@ use super::*;
 use painter::{Painter, Scene};
 use std::{cell::Cell, ptr, sync::atomic::Ordering};
 use windows::{core::w, Win32::{
-    Foundation::{HGLOBAL, HINSTANCE, LRESULT, RECT},
-    Graphics::Gdi::{BeginPaint, CreateRoundRectRgn, EndPaint, InvalidateRect, SetWindowRgn, PAINTSTRUCT},
+    Foundation::{HANDLE, HGLOBAL, HINSTANCE, LRESULT, RECT},
+    Graphics::Gdi::{BeginPaint, CreateRoundRectRgn, EndPaint, InvalidateRect, SetWindowRgn, UpdateWindow, PAINTSTRUCT},
     System::{Com::{CoInitializeEx, COINIT_APARTMENTTHREADED}, DataExchange::*, LibraryLoader::GetModuleHandleW, Memory::*},
     UI::{HiDpi::GetDpiForWindow, Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT}, WindowsAndMessaging::*},
 }};
+
+const FRAME_TIME: std::time::Duration = std::time::Duration::from_nanos(1_000_000_000/60);
+struct FrameTimer(windows_sys::Win32::Foundation::HANDLE);
+impl FrameTimer {
+    unsafe fn new() -> Result<Self,String> {
+        use windows_sys::Win32::System::Threading::*;
+        let mut handle = CreateWaitableTimerExW(ptr::null(),ptr::null(),CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,TIMER_ALL_ACCESS);
+        if handle.is_null() { handle = CreateWaitableTimerExW(ptr::null(),ptr::null(),0,TIMER_ALL_ACCESS); }
+        if handle.is_null() { return Err(windows::core::Error::from_win32().to_string()); }
+        Ok(Self(handle))
+    }
+    unsafe fn arm(&self, delay: std::time::Duration) -> Result<(),String> {
+        let due = -((delay.as_nanos()/100).max(1) as i64);
+        if windows_sys::Win32::System::Threading::SetWaitableTimerEx(self.0,&due,0,None,ptr::null(),ptr::null(),0)==0 {
+            return Err(windows::core::Error::from_win32().to_string());
+        }
+        Ok(())
+    }
+}
+impl Drop for FrameTimer { fn drop(&mut self) { unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0); } } }
 
 struct Window {
     hwnd: HWND,
@@ -58,7 +78,7 @@ impl Window {
             self.painter = Painter::new(self.hwnd, (420.0 * self.scale) as u32, (720.0 * self.scale) as u32, dpi, flags).ok();
         }
         if let Some(painter) = self.painter.as_mut() {
-            if let Err(error) = painter.paint(&self.scene) { self.painter = None; log_message(self.app.clone(), format!("Native paint: {error}")); }
+            if let Err(error) = painter.paint(&self.scene,self.controller.now()) { self.painter = None; log_message(self.app.clone(), format!("Native paint: {error}")); }
         }
         let _ = EndPaint(self.hwnd, &ps);
     }
@@ -159,11 +179,38 @@ pub(super) fn run(app: tauri::AppHandle, sender: Sender, receiver: mpsc::Receive
         if autostart { state.visible = false; state.controller.evaluate("__nativeVisibility(false);"); }
         else { let _ = ShowWindow(hwnd,SW_SHOW); }
         state.refresh();
+        let timer = FrameTimer::new()?;
+        let mut next_frame = Instant::now();
+        let mut frame_log = if preview { std::env::var_os("WARPY_NATIVE_FRAME_LOG").map(PathBuf::from) } else { None };
+        let measured_at = Instant::now();
+        let mut frame_samples = Vec::new();
         let mut message = MSG::default();
-        loop {
-            let result = GetMessageW(&mut message,None,0,0).0;
-            if result <= 0 { break; }
-            let _ = TranslateMessage(&message); DispatchMessageW(&message);
+        'messages: loop {
+            for _ in 0..64 {
+                if !PeekMessageW(&mut message,None,0,0,PM_REMOVE).as_bool() { break; }
+                if message.message==WM_QUIT { break 'messages; }
+                let _ = TranslateMessage(&message); DispatchMessageW(&message);
+            }
+            let animated = state.visible && state.scene.animated();
+            if animated {
+                if Instant::now()>=next_frame {
+                    let start = Instant::now();
+                    let _ = InvalidateRect(Some(hwnd),None,false); let _ = UpdateWindow(hwnd);
+                    if frame_log.is_some() { frame_samples.push((measured_at.elapsed().as_secs_f64()*1000.0,start.elapsed().as_secs_f64()*1000.0)); }
+                    next_frame += FRAME_TIME;
+                    while next_frame<=Instant::now() { next_frame += FRAME_TIME; }
+                }
+                timer.arm(next_frame.saturating_duration_since(Instant::now()))?;
+            } else {
+                windows_sys::Win32::System::Threading::CancelWaitableTimer(timer.0);
+                next_frame = Instant::now();
+            }
+            if measured_at.elapsed().as_secs()>=30 {
+                if let Some(path) = frame_log.take() { let _ = fs::write(path,serde_json::to_vec(&frame_samples).unwrap_or_default()); }
+            }
+            let handles = [HANDLE(timer.0)];
+            let result = MsgWaitForMultipleObjectsEx(if animated {Some(&handles)} else {None},u32::MAX,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
+            if result.0==u32::MAX { return Err(windows::core::Error::from_win32().to_string()); }
         }
         sender.hwnd.store(0,Ordering::Release);
         Ok(())

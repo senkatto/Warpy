@@ -133,3 +133,65 @@ verified against the configured public key. Its SHA-256 is:
 It has not been installed on the active PC: the installer's pre-install hook
 stops the VPN service, and the user requested preserving the active connection.
 No version bump, publication or server change was made.
+
+## Animation pacing and rendering repair — 2 October 2026
+
+The ID lookup repair was installed, but the visible window still used 2.91 CPU
+seconds during a ten-second sample. The remaining continuous work was the
+JavaScript particle loop, whole-scene JSON transfer and software drawing.
+The first repair's scene timing and CPU samples did not establish smooth
+animation presentation.
+
+The native canvas now retains one particle animation descriptor. Rust computes
+the same 86 particle positions, radii, colors and alpha values directly during
+painting, using the controller's monotonic clock. Controller scenes refresh for
+UI changes instead of every particle frame. The connecting spinner also uses
+the native drawing clock. The original browser renderer retains its JavaScript
+animation path.
+
+Direct2D uses its default hardware-capable target, with cached DirectWrite text
+layouts. An independent 60 Hz waitable timer wakes the window thread for visual
+frames without spinning or changing global timer resolution. Message handling
+is bounded between frames. Hidden windows cancel animation waits, and the
+opaque settings page does not animate covered particles.
+
+Verification includes 128 JavaScript tests and 70 Rust tests, with two manual
+tests ignored by the default Rust run. A regression check compares every native
+particle with the original JavaScript calculation at six timestamps for both
+connecting and connected states, including colors and alpha. Native controller
+tests cover connection-state transitions, cancellation and hide/show phase
+continuity. PNGs of six screens are byte-identical before and after text-layout
+caching. The legacy `cargo check` also passes.
+
+Frame timing capture is available only in isolated native preview mode by
+setting `WARPY_NATIVE_FRAME_LOG` to a local JSON output path. It records completed
+animation draws for 30 seconds; production launches ignore the variable.
+
+Final release verification, using separate previews after a 15-second warmup:
+
+- The prior installed build's visible preview consumed 4.328 CPU seconds over
+  20.009 seconds (21.63% of one logical processor, 1.35% of total CPU on this
+  16-logical-processor PC). The final visible preview consumed 1.922 CPU seconds
+  over 20.003 seconds (9.61% of one processor, 0.60% of total CPU). Its working
+  set was 63.45 MiB; private memory was 65.90 MiB.
+- After excluding the first five seconds, 1,495 completed animation draws
+  averaged 59.76 frames per second. The 95th percentile frame interval was
+  17.13 ms, the largest interval was 41.79 ms, and mean drawing time was 1.07 ms.
+  This measures window drawing, not physical display scanout.
+- The hidden preview consumed 0.063 CPU seconds over 20.004 seconds (0.02% of
+  total CPU) and used a 36.57 MiB working set. Animation waits were inactive.
+- These measurements cover the interface only, excluding the VPN service and
+  sing-box. Both previews spawned no children and preserved the settings hash.
+  The active service, core and installed UI retained PIDs 37828, 3124 and 53856.
+
+The final 1.0.7 installer was copied to `D:\Sync\VetomenAPK\Warpy-setup.exe`.
+The copied artifact matches the build output, and its updater signature was
+independently verified against the configured public key. Its SHA-256 is:
+
+```text
+31415F7C3B908750A6BBD971396C059434AEEEF3C7BE9714053E73F936F3E179
+```
+
+The installer has not been run because installation stops the active VPN
+service. The current connection and protected settings were preserved. No
+public version change, publication or server change was made.

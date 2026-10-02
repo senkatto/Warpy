@@ -1,4 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![recursion_limit = "256"]
 
 mod diagnostics;
 #[cfg(all(windows, feature = "native-ui"))]
@@ -27,6 +28,8 @@ mod vpn_service;
 mod windows_autostart;
 #[cfg(windows)]
 mod windows_connectivity;
+#[cfg(windows)]
+mod windows_file_dialog;
 
 #[cfg(not(windows))]
 use crate::vpn_engine::read_vpn_network_stats;
@@ -42,7 +45,6 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
-    process::Command,
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -51,7 +53,6 @@ use sysinfo::{ProcessExt, System, SystemExt};
 use tauri::Emitter;
 use tauri::{Manager, State};
 
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 const MAX_VPN_CONFIG_BYTES: usize = 768 * 1024;
 const MAX_SETTINGS_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PROTECTED_SETTINGS_BYTES: usize = MAX_SETTINGS_BYTES + 64 * 1024;
@@ -322,8 +323,8 @@ async fn cancel_vpn_start() -> Result<(), String> {
         let response = tauri::async_runtime::spawn_blocking(|| {
             vpn_ipc::call(&vpn_ipc::VpnRequest::CancelStart)
         })
-            .await
-            .map_err(|error| format!("VPN cancellation failed: {error}"))?;
+        .await
+        .map_err(|error| format!("VPN cancellation failed: {error}"))?;
         response??;
         Ok(())
     }
@@ -690,28 +691,7 @@ fn log_message(app: tauri::AppHandle, message: String) {
 fn select_executable() -> Result<Option<String>, String> {
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        let script = r#"
-            Add-Type -AssemblyName System.Windows.Forms;
-            $f = New-Object System.Windows.Forms.OpenFileDialog;
-            $f.Filter = "Applications (*.exe)|*.exe";
-            $f.InitialDirectory = "C:\Program Files";
-            $f.Title = "Выберите программу";
-            if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-                Write-Output $f.FileName
-            }
-        "#;
-        let output = Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", script])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map_err(|error| error.to_string())?;
-
-        if !output.status.success() {
-            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
-        }
-        let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok((!result.is_empty()).then_some(result))
+        windows_file_dialog::select_executable()
     }
     #[cfg(not(target_os = "windows"))]
     {

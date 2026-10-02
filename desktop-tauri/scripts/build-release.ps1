@@ -34,12 +34,7 @@ try {
         $loadedLocalKey = $true
     }
 
-    if ($Native) {
-        & npx tauri build --features native-ui --config src-tauri/tauri.native.conf.json --config src-tauri/tauri.updater.conf.json
-    }
-    else {
-        & npx tauri build --config src-tauri/tauri.updater.conf.json
-    }
+    & npx tauri build --features native-ui --config src-tauri/tauri.native.conf.json --config src-tauri/tauri.updater.conf.json
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri release build failed with exit code $LASTEXITCODE."
     }

@@ -6,10 +6,12 @@ authors = ["senkatto"]
 edition = "2021"
 
 [features]
-native-ui = ["dep:rquickjs", "dep:resvg", "reqwest/stream"]
+default = ["native-ui"]
+native-ui = ["dep:resvg", "dep:percent-encoding", "dep:qrcodegen", "dep:serde_yaml_ng", "reqwest/stream"]
 
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }
+serde_json = "1.0"
 
 [dependencies]
 tauri = { version = "2.0.0", features = ["tray-icon", "image-png"] }
@@ -24,8 +26,10 @@ sysinfo = "0.29"
 regex = "1.13"
 url = "2.5"
 zip = { version = "2.4", default-features = false }
-rquickjs = { version = "0.14", optional = true }
 resvg = { version = "0.45", default-features = false, optional = true }
+percent-encoding = { version = "2.3", optional = true }
+qrcodegen = { version = "1.8", optional = true }
+serde_yaml_ng = { version = "0.10", optional = true }
 tokio = { version = "1", features = ["time", "sync", "macros"] }
 base64 = "0.22"
 tokio-stream = "0.1"
@@ -49,6 +53,9 @@ windows = { version = "0.61", features = [
   "Win32_System_Memory",
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_HiDpi",
+  "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
+  "Win32_Globalization",
   "Win32_UI_Input_KeyboardAndMouse",
 ] }
 windows-sys = { version = "0.59", features = [
@@ -71,6 +78,7 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 [dev-dependencies]
+rquickjs = "0.14"
 minisign-verify = "0.2.5"
 png = "0.17"
 

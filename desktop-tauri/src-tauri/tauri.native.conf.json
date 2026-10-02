@@ -1,4 +1,5 @@
 {
+  "build": { "frontendDist": "../native-assets" },
   "app": { "windows": [] },
   "bundle": { "windows": { "webviewInstallMode": { "type": "skip" } } }
 }

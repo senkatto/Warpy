@@ -86,7 +86,7 @@ QR-кода или изображения с QR-кодом; на Windows - из 
 ### Системные требования
 
 - **Android:** Android 8.0 или новее, устройство `arm64-v8a`.
-- **Windows:** Windows 10 или новее, x64 и Microsoft Edge WebView2 Runtime.
+- **Windows:** Windows 10 или новее, x64. Нативный интерфейс на Rust, без WebView2.
 
 ## Конфиденциальность и безопасность
 

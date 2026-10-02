@@ -1,15 +1,14 @@
 # Warpy Desktop
 
-Minimal Windows x64 client for VLESS, Trojan, and Hysteria2 profiles. The desktop app uses Tauri 2 for the UI and a bundled sing-box core for the tunnel.
+Minimal Windows x64 client for VLESS, Trojan, and Hysteria2 profiles. The window, rendering, settings, imports and connection controller are written in Rust. Win32 and Direct2D draw the interface; Tauri provides the tray and signed updater. The tunnel uses the bundled sing-box core.
 
 ## Requirements
 
 - Windows 10 or newer (x64)
 - Node.js 20 or newer
 - Rust stable with the MSVC toolchain
-- WebView2 Runtime
 
-Wintun requires elevation when the application starts.
+The VPN service runs with elevation; the interface runs in the user session. WebView2, JavaScript and PowerShell are not used by the running client.
 
 ## Development
 
@@ -51,6 +50,8 @@ reputation for a freshly downloaded installer.
 - The bundled sing-box executable is verified with SHA-256 before first use in each app process.
 - The temporary runtime configuration is removed after sing-box starts.
 - Warpy manages only the sing-box process that it started.
-- The renderer capability allowlist exposes only the window, event, and notification commands used by the UI.
+- The native interface calls the Rust controller directly.
+- Hidden windows stop animation and network measurements.
+- QuickJS is a test-only dependency used to compare the port against the previous interface.
 
 Core provenance is documented in `src-tauri/bin/CORE_PROVENANCE.md`.

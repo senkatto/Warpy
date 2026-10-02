@@ -59,15 +59,15 @@ pub(crate) fn run(core: &Path, config: &str) -> Result<Vec<ProfileProbeResult>, 
     }
     let mut pending = tags
         .into_iter()
-            .filter_map(|tag| {
-                let index = tag
-                    .strip_prefix("profile-")?
-                    .parse::<usize>()
-                    .ok()?
-                    .checked_sub(1)?;
-                Some((index, tag))
-            })
-            .collect::<Vec<_>>();
+        .filter_map(|tag| {
+            let index = tag
+                .strip_prefix("profile-")?
+                .parse::<usize>()
+                .ok()?
+                .checked_sub(1)?;
+            Some((index, tag))
+        })
+        .collect::<Vec<_>>();
     pending.sort_by_key(|(index, _)| std::cmp::Reverse(*index));
     let queue = Arc::new(Mutex::new(pending));
     let results = Arc::new(Mutex::new(Vec::new()));
@@ -76,14 +76,13 @@ pub(crate) fn run(core: &Path, config: &str) -> Result<Vec<ProfileProbeResult>, 
             let queue = Arc::clone(&queue);
             let results = Arc::clone(&results);
             let control = control.clone();
-            scope.spawn(move || loop {
-                let Some((index, tag)) = queue.lock().ok().and_then(|mut values| values.pop())
-                else {
-                    break;
-                };
-                let delay_ms = control.probe_outbound(&tag).ok();
-                if let Ok(mut values) = results.lock() {
-                    values.push(ProfileProbeResult { index, delay_ms });
+            scope.spawn(move || {
+                while let Some((index, tag)) = queue.lock().ok().and_then(|mut values| values.pop())
+                {
+                    let delay_ms = control.probe_outbound(&tag).ok();
+                    if let Ok(mut values) = results.lock() {
+                        values.push(ProfileProbeResult { index, delay_ms });
+                    }
                 }
             });
         }

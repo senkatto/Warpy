@@ -11,8 +11,10 @@ use windows_sys::Win32::Networking::WinHttp::{
     WINHTTP_FLAG_SECURE, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
 };
 
-const PROBE_SERVER: &str = "www.gstatic.com";
-const PROBE_PATH: &str = "/generate_204";
+const PROBE_TARGETS: [(&str, &str); 2] = [
+    ("speed.cloudflare.com", "/__down?bytes=1024"),
+    ("www.gstatic.com", "/generate_204"),
+];
 const PROBE_ATTEMPTS: usize = 3;
 const PROBE_RETRY_DELAY: Duration = Duration::from_millis(600);
 
@@ -79,6 +81,21 @@ fn verify_tunnel_with_attempts(probe: &TunnelProbe, attempts: usize) -> Result<(
 }
 
 fn probe_once(probe: &TunnelProbe) -> Result<(), String> {
+    probe_targets(|server, path| probe_target(probe, server, path))
+}
+
+fn probe_targets(mut check: impl FnMut(&str, &str) -> Result<(), String>) -> Result<(), String> {
+    let mut last_error = String::new();
+    for (server, path) in PROBE_TARGETS {
+        match check(server, path) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
+}
+
+fn probe_target(probe: &TunnelProbe, server: &str, path: &str) -> Result<(), String> {
     let agent = wide("Warpy tunnel check");
     let proxy = wide(&probe.address);
     let session = WinHttpHandle::new(unsafe {
@@ -94,7 +111,7 @@ fn probe_once(probe: &TunnelProbe) -> Result<(), String> {
         return Err(winhttp_error("Не удалось настроить проверку туннеля"));
     }
 
-    let server = wide(PROBE_SERVER);
+    let server = wide(server);
     let connection = WinHttpHandle::new(unsafe {
         WinHttpConnect(
             session.raw(),
@@ -104,7 +121,7 @@ fn probe_once(probe: &TunnelProbe) -> Result<(), String> {
         )
     })?;
     let verb = wide("GET");
-    let path = wide(PROBE_PATH);
+    let path = wide(path);
     let request = WinHttpHandle::new(unsafe {
         WinHttpOpenRequest(
             connection.raw(),
@@ -222,6 +239,29 @@ impl Drop for WinHttpHandle {
 mod tests {
     use super::{configure_tunnel_probe, successful_probe_status};
     use serde_json::json;
+
+    #[test]
+    fn one_blocked_endpoint_does_not_mark_a_working_tunnel_down() {
+        let mut visited = Vec::new();
+        let result = super::probe_targets(|server, _| {
+            visited.push(server.to_string());
+            if server == "speed.cloudflare.com" {
+                Err("HTTP 504".into())
+            } else {
+                Ok(())
+            }
+        });
+        assert!(result.is_ok());
+        assert_eq!(visited, ["speed.cloudflare.com", "www.gstatic.com"]);
+        let mut visited = Vec::new();
+        assert!(super::probe_targets(|server, _| {
+            visited.push(server.to_string());
+            Ok(())
+        })
+        .is_ok());
+        assert_eq!(visited, ["speed.cloudflare.com"]);
+        assert!(super::probe_targets(|_, _| Err("unreachable".into())).is_err());
+    }
 
     #[test]
     #[ignore = "requires bundled sing-box and HTTPS connectivity; never creates a TUN"]

@@ -131,6 +131,15 @@ impl Window {
             self.painter = None;
         }
     }
+    unsafe fn sync_visibility(&mut self) {
+        // DefWindowProc restores the window with nested WM_SIZE messages, which
+        // the borrowing guard defers. Read the actual state after dispatch.
+        let visible = IsWindowVisible(self.hwnd).as_bool() && !IsIconic(self.hwnd).as_bool();
+        if self.visible != visible {
+            self.visibility(visible);
+            self.refresh();
+        }
+    }
     unsafe fn show(&mut self) {
         let _ = ShowWindow(self.hwnd, SW_RESTORE);
         let _ = SetForegroundWindow(self.hwnd);
@@ -200,14 +209,6 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, wp: WPARAM, lp: LP
             let _ = ShowWindow(hwnd, SW_HIDE);
             state.visibility(false);
             state.refresh();
-        }
-        WM_SIZE => {
-            if wp.0 == SIZE_MINIMIZED as usize {
-                state.visibility(false);
-            } else {
-                state.visibility(true);
-                state.refresh();
-            }
         }
         WM_NCHITTEST => {
             let mut point = windows::Win32::Foundation::POINT {
@@ -451,6 +452,7 @@ pub(super) fn run(
                 let _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
+            state.sync_visibility();
             let animated = state.visible && state.scene.animated();
             if animated {
                 if Instant::now() >= next_frame {

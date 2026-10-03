@@ -6,9 +6,19 @@ pub(crate) const MAX_RECOVERY_ATTEMPTS: usize = 3;
 pub(crate) struct RecoveryState {
     attempts: usize,
     next_attempt: Option<Instant>,
+    validation_failures: usize,
 }
 
 impl RecoveryState {
+    /// A transient timeout at the check sites must not tear down a live tunnel.
+    pub(crate) fn record_health(&mut self, healthy: bool) -> bool {
+        self.validation_failures = if healthy {
+            0
+        } else {
+            self.validation_failures.saturating_add(1)
+        };
+        self.validation_failures >= 2
+    }
     pub(crate) fn is_due(&self) -> bool {
         self.attempts < MAX_RECOVERY_ATTEMPTS
             && self
@@ -59,6 +69,18 @@ pub(crate) fn recovery_delay(attempt: usize) -> Duration {
 mod tests {
     use super::{recovery_delay, RecoveryState};
     use std::time::Duration;
+
+    #[test]
+    fn recovery_requires_consecutive_failed_validations() {
+        let mut state = RecoveryState::default();
+        assert!(!state.record_health(false));
+        assert!(!state.record_health(true));
+        assert!(!state.record_health(false));
+        assert!(state.record_health(false));
+        state.reset();
+        assert!(!state.record_health(false));
+        assert!(state.record_health(false));
+    }
 
     #[test]
     fn recovery_backoff_is_bounded() {

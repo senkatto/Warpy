@@ -2193,6 +2193,28 @@ mod tests {
         assert!(c.ui.speedtest.results.is_none());
     }
     #[test]
+    fn repeated_visibility_changes_resume_the_clock_without_restarting_the_vpn() {
+        let mut c = controller();
+        c.preview = true;
+        c.apply_snapshot(&json!({"status":"Connected","desiredRunning":true}), false);
+        let started = c.ui.connected_unix;
+        for cycle in 1..=5 {
+            c.set_visible(false);
+            c.clock = Instant::now() - std::time::Duration::from_secs(cycle * 5);
+            c.tick();
+            c.dirty = false;
+            c.set_visible(true);
+            assert!(c.scene().unwrap().unwrap().animated());
+            c.tick();
+            assert!(c.ui.connected());
+            assert_eq!(c.ui.connected_unix, started);
+            assert!(c.next_uptime > c.now());
+        }
+        assert!(!requests(&c).iter().any(|(_, name, _)| {
+            matches!(name.as_str(), "start_vpn" | "stop_vpn" | "cancel_vpn_start")
+        }));
+    }
+    #[test]
     fn service_timeouts_preserve_a_connected_tunnel_and_show_a_recoverable_error() {
         let mut c = controller();
         c.apply_snapshot(&json!({"status":"Connected","desiredRunning":true}), false);

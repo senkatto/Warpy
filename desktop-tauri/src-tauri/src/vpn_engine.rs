@@ -451,8 +451,11 @@ impl VpnEngine {
             return None;
         }
 
-        if state == EngineState::Connected && self.verify_tunnel(false).is_ok() {
-            return None;
+        if state == EngineState::Connected {
+            let healthy = self.verify_tunnel(false).is_ok();
+            if !self.recovery.lock().ok()?.record_health(healthy) {
+                return None;
+            }
         }
 
         if !matches!(state, EngineState::Connected | EngineState::Error) {

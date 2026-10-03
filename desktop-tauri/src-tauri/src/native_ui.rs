@@ -368,6 +368,74 @@ pub(crate) fn run(
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "uses the saved profile and a specified physical interface; never creates a TUN or calls the service"]
+    fn saved_profile_survives_repeated_health_checks_without_a_tun() {
+        use std::{
+            os::windows::process::CommandExt,
+            process::{Child, Command, Stdio},
+            time::Duration,
+        };
+        let interface =
+            std::env::var("WARPY_TEST_INTERFACE").expect("Specify the physical interface");
+        let path = PathBuf::from(std::env::var_os("APPDATA").unwrap())
+            .join("com.warpy.desktop/settings.dat");
+        let settings: Value =
+            serde_json::from_str(&read_protected_settings(&path).unwrap()).unwrap();
+        let mut ui = model::Ui::new();
+        ui.load_settings(settings).unwrap();
+        let mut config = config::runtime(ui.profiles(), ui.active(), &ui.settings, false)
+            .unwrap()
+            .0;
+        config["inbounds"] = json!([]);
+        config["log"] = json!({"disabled":true});
+        config["route"]["default_interface"] = json!(interface);
+        config["route"]["auto_detect_interface"] = json!(false);
+        let probe = crate::vpn_probe::configure_tunnel_probe(&mut config).unwrap();
+        let (config, control) = crate::vpn_selector::prepare_config(&config.to_string()).unwrap();
+        let control = control.unwrap();
+        let path =
+            std::env::temp_dir().join(format!("warpy-isolated-health-{}.json", std::process::id()));
+        struct ProbeCore {
+            child: Option<Child>,
+            path: PathBuf,
+        }
+        impl Drop for ProbeCore {
+            fn drop(&mut self) {
+                if let Some(child) = &mut self.child {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                let _ = fs::remove_file(&self.path);
+            }
+        }
+        let mut core = ProbeCore { child: None, path };
+        fs::write(&core.path, config).unwrap();
+        core.child = Some(
+            Command::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("bin/sing-box-x86_64-pc-windows-msvc.exe"),
+            )
+            .args(["run", "-c"])
+            .arg(&core.path)
+            .creation_flags(0x08000000)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+        );
+        control.wait_until_ready(Duration::from_secs(5)).unwrap();
+        for cycle in 1..=6 {
+            crate::vpn_probe::verify_tunnel_once(&probe).unwrap();
+            let latency = control.probe_outbound(control.selected()).unwrap();
+            eprintln!("Health check {cycle}/6 passed ({latency} ms)");
+            if cycle < 6 {
+                std::thread::sleep(Duration::from_secs(5));
+            }
+        }
+        assert!(core.child.as_mut().unwrap().try_wait().unwrap().is_none());
+    }
+    #[test]
     fn native_measurement_client_initializes_tls_without_updater_startup() {
         let _client = measurement_client().unwrap();
         assert!(rustls::crypto::CryptoProvider::get_default().is_some());

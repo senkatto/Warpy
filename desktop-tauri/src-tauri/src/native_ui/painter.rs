@@ -457,7 +457,7 @@ impl Painter {
             lock.GetDataPointer(&mut bytes, &mut pointer)
                 .map_err(|e| e.to_string())?;
             let mut pixels = std::slice::from_raw_parts(pointer, bytes as usize).to_vec();
-            for pixel in pixels.chunks_exact_mut(4) {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
                 if pixel[3] > 0 {
                     for channel in 0..3 {
@@ -522,14 +522,14 @@ impl Painter {
             }
             let image = tauri::image::Image::from_path(self.flags.join(filename)).ok()?;
             let mut pixels = image.rgba().to_vec();
-            for pixel in pixels.chunks_exact_mut(4) {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
                 for channel in 0..3 {
                     pixel[channel] = (pixel[channel] as u32 * pixel[3] as u32 / 255) as u8;
                 }
             }
             (image.width(), image.height(), pixels)
         };
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         let properties = D2D1_BITMAP_PROPERTIES {

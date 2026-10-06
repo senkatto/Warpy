@@ -488,7 +488,10 @@ impl VpnEngine {
                 "Не удалось определить активное физическое подключение к интернету".to_string()
             })?;
             set_default_interface(&mut runtime_config, &interface);
-            *self.tunnel_probe.lock().map_err(|error| error.to_string())? =
+            *self
+                .tunnel_probe
+                .lock()
+                .map_err(|error| error.to_string())? =
                 Some(configure_tunnel_probe(&mut runtime_config)?);
         }
         let runtime_config =
@@ -558,11 +561,14 @@ impl VpnEngine {
             });
         }
         self.cancellable_start_delay(Duration::from_millis(350))?;
-        let initial_status = self.core.lock()
+        let initial_status = self
+            .core
+            .lock()
             .map_err(|_| "Состояние VPN недоступно".to_string())?
             .as_mut()
             .ok_or_else(|| START_CANCELLED.to_string())?
-            .child.try_wait()
+            .child
+            .try_wait()
             .map_err(|error| error.to_string())?;
         if let Some(status) = initial_status {
             let details = last_log_message(&tail_file(&log_path));
@@ -615,8 +621,12 @@ impl VpnEngine {
 
     #[cfg(windows)]
     fn verify_tunnel(&self, once: bool) -> Result<(), String> {
-        let probe = self.tunnel_probe.lock().map_err(|error| error.to_string())?
-            .clone().ok_or_else(|| "VPN probe is not ready".to_string())?;
+        let probe = self
+            .tunnel_probe
+            .lock()
+            .map_err(|error| error.to_string())?
+            .clone()
+            .ok_or_else(|| "VPN probe is not ready".to_string())?;
         if once {
             crate::vpn_probe::verify_tunnel_once(&probe)
         } else {
@@ -716,7 +726,9 @@ impl VpnEngine {
     }
 
     fn observe_core(&self) {
-        let Ok(_lifecycle) = self.lifecycle.try_lock() else { return };
+        let Ok(_lifecycle) = self.lifecycle.try_lock() else {
+            return;
+        };
         let core_failed = match self.core.lock() {
             Ok(mut core) => match core.as_mut() {
                 Some(process) => match process.child.try_wait() {
@@ -1449,12 +1461,19 @@ mod log_tests {
     #[test]
     fn cancellation_terminates_owned_core_without_waiting_for_lifecycle() {
         use super::{assign_kill_on_close_job, singbox_command, ManagedCore, VpnEngine};
-        use std::{path::Path, process::Stdio, sync::atomic::Ordering, time::{Duration, Instant}};
+        use std::{
+            path::Path,
+            process::Stdio,
+            sync::atomic::Ordering,
+            time::{Duration, Instant},
+        };
 
         let engine = VpnEngine::new();
         let child = singbox_command(Path::new("C:\\Windows\\System32\\ping.exe"))
             .args(["-n", "30", "127.0.0.1"])
-            .stdout(Stdio::null()).spawn().unwrap();
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
         let job = assign_kill_on_close_job(&child).unwrap();
         *engine.core.lock().unwrap() = Some(ManagedCore { child, _job: job });
         let _lifecycle = engine.lifecycle.lock().unwrap();

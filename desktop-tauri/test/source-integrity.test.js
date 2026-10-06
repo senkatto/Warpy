@@ -539,8 +539,8 @@ test('subscription updates are persisted with the current settings schema', asyn
   assert.match(subscriptionSource, /maxDepth: 20/);
   assert.match(subscriptionSource, /maxTotalMergeKeys: 0/);
   assert.match(subscriptionSource, /propertyValue\(config, \['proxies'\]\)/);
-  assert.equal(packageJson.dependencies['js-yaml'], '4.3.1');
-  assert.match(yamlSource, /Vendored from js-yaml 4\.3\.1/);
+  assert.equal(packageJson.dependencies['js-yaml'], '4.3.2');
+  assert.match(yamlSource, /Vendored from js-yaml 4\.3\.2/);
   assert.match(yamlLicense, /The MIT License/);
 });
 

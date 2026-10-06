@@ -242,7 +242,10 @@ mod tests {
         assert!(schedule.take_due(due).is_none());
         assert_eq!(schedule.wait_duration(due), Duration::from_secs(30));
         assert_eq!(
-            schedule.take_due(due + Duration::from_secs(30)).unwrap().label(),
+            schedule
+                .take_due(due + Duration::from_secs(30))
+                .unwrap()
+                .label(),
             "periodic"
         );
     }

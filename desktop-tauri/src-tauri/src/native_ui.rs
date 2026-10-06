@@ -704,6 +704,7 @@ mod tests {
         use model::Overlay::*;
         let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../.artifacts/rust-client-migration");
+        fs::create_dir_all(&directory).unwrap();
         let mut failures = Vec::new();
         for lang in ["ru", "en"] {
             for name in [

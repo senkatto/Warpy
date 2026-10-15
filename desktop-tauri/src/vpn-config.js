@@ -888,7 +888,11 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
 
   const apps = cleanProcessNames(settings.appsList);
   if (apps.length && settings.appsMode === 'bypass') {
-    rules.push({ process_name: apps, action: 'route', outbound: TAGS.direct });
+    // Match excluded apps before sniffing and global rejects, preserving TUN DNS.
+    rules.unshift(
+      { inbound: [TAGS.tun], port: 53, action: 'hijack-dns' },
+      { process_name: apps, action: 'route', outbound: TAGS.direct },
+    );
   } else if (apps.length && settings.appsMode === 'only') {
     rules.push({ process_name: apps, action: 'route', outbound: TAGS.proxy });
     config.route.final = TAGS.direct;

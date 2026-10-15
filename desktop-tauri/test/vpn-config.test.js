@@ -318,6 +318,21 @@ test('hijacks DNS before split rules and forces health checks through VPN', () =
   assert.equal(config.route.rules.some(rule => (rule.port === 53 || rule.port?.includes?.(53)) && rule.outbound === 'direct'), false);
 });
 
+test('excluded torrent apps bypass sniffing and global rejects while TUN DNS stays intercepted', () => {
+  const profile = parseProfileLink('vless://00000000-0000-4000-8000-000000000000@203.0.113.10:443#VLESS');
+  const settings = { appsMode: 'bypass', appsList: ['qbittorrent.exe'], quic: true, adblock: true };
+  const configs = [buildSingBoxConfig(profile, settings), buildSelectableSingBoxConfig([profile], 0, settings)];
+  for (const config of configs) {
+    const rules = config.route.rules;
+    assert.deepEqual(rules[0], { inbound: ['tun-in'], port: 53, action: 'hijack-dns' });
+    assert.deepEqual(rules[1], { process_name: ['qbittorrent.exe'], action: 'route', outbound: 'direct' });
+    assert.ok(rules.findIndex(rule => rule.action === 'sniff') > 1);
+    assert.ok(rules.filter(rule => rule.action === 'reject').every(rule => rules.indexOf(rule) > 1));
+    assert.equal(rules.filter(rule => rule.process_name?.includes('qbittorrent.exe')).length, 1);
+    assert.equal(config.route.final, 'proxy');
+  }
+});
+
 test('uses proxy-detoured DNS over HTTPS and bounds slow proxy dials', () => {
   const profile = parseProfileLink(
     'vless://00000000-0000-4000-8000-000000000000@example.com:443'

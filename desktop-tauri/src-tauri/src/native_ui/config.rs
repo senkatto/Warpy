@@ -568,7 +568,19 @@ pub(super) fn selectable(
             let mut rule =
                 json!({"action":"route","outbound":if mode=="only"{"proxy"}else{"direct"}});
             rule[key] = values;
-            rules.push(rule);
+            if key == "process_name" && mode == "bypass" {
+                // Excluded apps must not wait for sniffing or hit global rejects.
+                // Keep ordinary TUN DNS inside the resolver before routing the app.
+                rules.splice(
+                    0..0,
+                    [
+                        json!({"inbound":["tun-in"],"port":53,"action":"hijack-dns"}),
+                        rule,
+                    ],
+                );
+            } else {
+                rules.push(rule);
+            }
             if mode == "only" {
                 final_route = "direct";
             }

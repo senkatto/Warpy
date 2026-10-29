@@ -4,6 +4,7 @@ import com.warpy.app.model.VpnState
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -27,6 +28,7 @@ internal sealed interface ConnectionRecoveryResult {
 }
 
 internal interface VpnSessionOperations {
+    fun hasUpstreamNetwork(): Boolean
     suspend fun startCore(generation: Long, profileTag: String)
     suspend fun stopCore(coreGeneration: Long)
     suspend fun validateTunnel(
@@ -51,6 +53,7 @@ internal class VpnSessionRuntime(
     initialSnapshot: VpnSessionSnapshot = VpnSessionSnapshot(),
     private val operations: VpnSessionOperations,
     onSnapshotChanged: (VpnSessionSnapshot) -> Unit = {},
+    private val networkRetryDelayMillis: Long = 5_000L,
 ) {
     private val runtimeScope = scope
     private val resourceMutex = Mutex()
@@ -58,6 +61,7 @@ internal class VpnSessionRuntime(
     private val validationJobOwner = CancellableJobOwner(scope)
     private val switchJobOwner = CancellableJobOwner(scope)
     private val recoveryJobOwner = CancellableJobOwner(scope)
+    private val networkWaitJobOwner = CancellableJobOwner(scope)
     private val controller = VpnSessionController(
         initialSnapshot = initialSnapshot,
         reducer = reducer,
@@ -76,6 +80,7 @@ internal class VpnSessionRuntime(
         validationJobOwner.cancel()
         switchJobOwner.cancel()
         recoveryJobOwner.cancel()
+        networkWaitJobOwner.cancel()
         controller.close()
     }
 
@@ -85,6 +90,7 @@ internal class VpnSessionRuntime(
             validationJobOwner.cancel()
             switchJobOwner.cancel()
             recoveryJobOwner.cancel()
+            networkWaitJobOwner.cancel()
             operations.cancelOperations(effect.generation)
         }
 
@@ -112,6 +118,19 @@ internal class VpnSessionRuntime(
             launchRecovery(effect)
         }
 
+        effects.filterIsInstance<VpnSessionEffect.WaitForUpstream>().forEach { effect ->
+            networkWaitJobOwner.launch {
+                // Also covers a callback lost while a cancelled startup closes its monitor.
+                // This runs only while waiting for a network; it does not wake a sleeping device.
+                while (isCurrent(effect.generation) && snapshot().state == VpnState.Recovering) {
+                    delay(networkRetryDelayMillis)
+                    if (operations.hasUpstreamNetwork()) {
+                        controller.dispatch(VpnSessionEvent.UpstreamAvailable(effect.generation))
+                        break
+                    }
+                }
+            }
+        }
     }
 
     private fun launchResourceTransaction(

@@ -339,8 +339,11 @@ class VpnSessionReducerTest {
         assertEquals(connected.connectedAtElapsedMillis, lost.snapshot.connectedAtElapsedMillis)
         assertEquals(connected.generation + 1L, lost.snapshot.generation)
         assertEquals(
-            VpnSessionEffect.CancelOperations(connected.generation),
-            lost.effects.single(),
+            listOf(
+                VpnSessionEffect.CancelOperations(connected.generation),
+                VpnSessionEffect.WaitForUpstream(lost.snapshot.generation),
+            ),
+            lost.effects,
         )
         assertEquals(VpnState.Validating, available.snapshot.state)
         assertEquals(

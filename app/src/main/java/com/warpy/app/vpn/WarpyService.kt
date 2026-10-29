@@ -85,6 +85,7 @@ import com.hiddify.core.libbox.SystemProxyStatus
 import com.hiddify.core.libbox.TunOptions
 import com.hiddify.core.libbox.WIFIState
 import java.io.File
+import java.io.IOException
 import java.net.InetAddress
 import java.net.NetworkInterface
 import java.net.InetSocketAddress
@@ -188,6 +189,8 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     ).also { sessionRuntime = it }
 
     private inner class ServiceSessionOperations : VpnSessionOperations {
+        override fun hasUpstreamNetwork(): Boolean = findUpstreamNetwork() != null
+
         override suspend fun startCore(generation: Long, profileTag: String) {
             try {
                 stateMutex.withLock {
@@ -558,12 +561,17 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             ?: sessionRuntime?.snapshot()?.runtimeProfileTag
             ?: preferredTag
 
-        if (reason == ValidationReason.Initial && findUpstreamNetwork() == null) {
+        val network = findUpstreamNetwork()
+        if (network == null) {
             return SessionValidationResult(
                 succeeded = false,
                 message = "Ожидание сети",
                 recoverable = true,
             )
+        }
+        if (upstreamNetwork != network) {
+            updateUpstreamNetwork(network)
+            resetCoreNetwork("validation-upstream-changed")
         }
 
         if (preferredProfile?.protocol?.isUdpBased == true &&
@@ -812,6 +820,8 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             lastUpstreamIdentity = null
             upstreamNetwork = null
             runCatching { setUnderlyingNetworks(emptyArray()) }
+            runCatching { interfaceListener?.updateDefaultInterface("", -1, false, false) }
+                .onFailure { Log.w(TAG, "failed to clear core underlying network", it) }
             sessionRuntime().dispatch(
                 VpnSessionEvent.UpstreamChanged(available = false),
             )
@@ -823,13 +833,25 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         lastUpstreamIdentity = identity
         upstreamNetwork = state.network
         if (sameConnection) return
-        runCatching { setUnderlyingNetworks(arrayOf(state.network)) }
-            .onFailure { Log.w(TAG, "failed to set VPN underlying network", it) }
-        updateDefaultInterface(state.network)
+        updateUpstreamNetwork(state.network)
+        resetCoreNetwork("upstream-changed")
         closeTunnelConnections("upstream-changed")
         sessionRuntime().dispatch(
             VpnSessionEvent.UpstreamChanged(available = true),
         )
+    }
+
+    private fun updateUpstreamNetwork(network: Network) {
+        upstreamNetwork = network
+        runCatching { setUnderlyingNetworks(arrayOf(network)) }
+            .onFailure { Log.w(TAG, "failed to set VPN underlying network", it) }
+        updateDefaultInterface(network)
+    }
+
+    private fun resetCoreNetwork(reason: String) {
+        // Closing tracked connections alone leaves pooled Hysteria/QUIC transports alive.
+        runCatching { commandServer?.resetNetwork() }
+            .onFailure { Log.w(TAG, "failed to reset core network reason=$reason", it) }
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -1163,10 +1185,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         val currentNetwork = findUpstreamNetwork()
             ?: return ConnectionRecoveryResult.Deferred("Ожидание сети")
 
-        upstreamNetwork = currentNetwork
-        runCatching { setUnderlyingNetworks(arrayOf(currentNetwork)) }
-            .onFailure { Log.w(TAG, "failed to update underlying network", it) }
-        updateDefaultInterface(currentNetwork)
+        updateUpstreamNetwork(currentNetwork)
 
         if (request.probeBeforeRefresh && hasActiveVpnTunnel() && probeForRecovery()) {
             return completedRecovery(request)
@@ -1177,6 +1196,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             return ConnectionRecoveryResult.Exhausted("Не удалось восстановить соединение")
         }
 
+        resetCoreNetwork("${request.reason}/recovery")
         val connectionsReset = closeTunnelConnections("${request.reason}/recovery")
         if (connectionsReset) {
             val settleDelay = if (activeProfileProtocol()?.isUdpBased == true) {
@@ -1463,7 +1483,12 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     override fun autoDetectInterfaceControl(fd: Int) {
-        protect(fd)
+        if (!protect(fd)) throw IOException("Failed to protect VPN socket")
+        val network = findUpstreamNetwork() ?: throw IOException("No physical network available")
+        // Duplicate the descriptor so closing the Java wrapper cannot close the core's socket.
+        ParcelFileDescriptor.fromFd(fd).use { descriptor ->
+            network.bindSocket(descriptor.fileDescriptor)
+        }
     }
 
     override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
@@ -1870,10 +1895,13 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     private fun findUpstreamNetwork(): Network? {
-        networkMonitor?.currentState()?.network?.let { return it }
+        networkMonitor?.let { return it.currentState()?.network }
         return connectivity.allNetworks
             .mapNotNull { network ->
                 val caps = connectivity.getNetworkCapabilities(network) ?: return@mapNotNull null
+                if (connectivity.getLinkProperties(network)?.interfaceName.isNullOrBlank()) {
+                    return@mapNotNull null
+                }
                 val suspended = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
                     !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
                 if (!isHandoverCandidatePhysicalNetwork(

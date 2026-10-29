@@ -41,10 +41,9 @@ internal class DefaultNetworkMonitor(
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = updateCandidates {
             Log.i(TAG, "Physical network available: $network")
-            candidates.getOrPut(network, ::Candidate).apply {
-                capabilities = connectivity.getNetworkCapabilities(network)
-                linkProperties = connectivity.getLinkProperties(network)
-            }
+            // Capabilities and links arrive in the following callbacks. Synchronous
+            // queries here can return null or data from a later network state.
+            candidates.getOrPut(network, ::Candidate)
         }
 
         override fun onCapabilitiesChanged(
@@ -74,24 +73,6 @@ internal class DefaultNetworkMonitor(
     private val preferredCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = updateCandidates {
             preferredNetwork = network
-            candidates.getOrPut(network, ::Candidate).apply {
-                capabilities = connectivity.getNetworkCapabilities(network)
-                linkProperties = connectivity.getLinkProperties(network)
-            }
-        }
-
-        override fun onCapabilitiesChanged(
-            network: Network,
-            capabilities: NetworkCapabilities,
-        ) = updateCandidates {
-            candidates.getOrPut(network, ::Candidate).capabilities = capabilities
-        }
-
-        override fun onLinkPropertiesChanged(
-            network: Network,
-            properties: LinkProperties,
-        ) = updateCandidates {
-            candidates.getOrPut(network, ::Candidate).linkProperties = properties
         }
 
         override fun onLost(network: Network) = updateCandidates {
@@ -112,6 +93,7 @@ internal class DefaultNetworkMonitor(
         val nextState = candidates
             .mapNotNull { (network, candidate) ->
                 val capabilities = candidate.capabilities ?: return@mapNotNull null
+                if (candidate.linkProperties?.interfaceName.isNullOrBlank()) return@mapNotNull null
                 val isSuspended = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
                     !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
                 if (!isHandoverCandidatePhysicalNetwork(

@@ -70,6 +70,7 @@ internal sealed interface VpnSessionEvent {
     data object ScreenLocked : VpnSessionEvent
     data object ScreenUnlocked : VpnSessionEvent
     data class UpstreamChanged(val available: Boolean) : VpnSessionEvent
+    data class UpstreamAvailable(val generation: Long) : VpnSessionEvent
     data class CoreDied(val generation: Long, val message: String) : VpnSessionEvent
     data object PermissionRevoked : VpnSessionEvent
     data class ProcessRestored(
@@ -103,6 +104,7 @@ internal sealed interface VpnSessionEffect {
         val generation: Long,
         val request: RecoveryRequest,
     ) : VpnSessionEffect
+    data class WaitForUpstream(val generation: Long) : VpnSessionEffect
 }
 
 internal data class VpnSessionReduction(
@@ -215,6 +217,7 @@ internal class VpnSessionReducer(
             if (!snapshot.shouldRun) return@current VpnSessionReduction(snapshot)
             VpnSessionReduction(
                 snapshot.copy(state = VpnState.Recovering, lastError = event.message),
+                listOf(VpnSessionEffect.WaitForUpstream(event.generation)),
             )
         }
         is VpnSessionEvent.RecoveryExhausted -> current(snapshot, event.generation) {
@@ -259,6 +262,13 @@ internal class VpnSessionReducer(
         )
         VpnSessionEvent.ScreenUnlocked -> screenUnlocked(snapshot)
         is VpnSessionEvent.UpstreamChanged -> upstreamChanged(snapshot, event.available)
+        is VpnSessionEvent.UpstreamAvailable -> current(snapshot, event.generation) {
+            if (snapshot.state == VpnState.Recovering) {
+                upstreamChanged(snapshot, available = true)
+            } else {
+                VpnSessionReduction(snapshot)
+            }
+        }
         is VpnSessionEvent.CoreDied -> current(snapshot, event.generation) {
             val profileTag = snapshot.preferredProfileTag
             if (!snapshot.shouldRun || profileTag == null) {
@@ -506,6 +516,7 @@ internal class VpnSessionReducer(
                     if (previousGeneration > 0L) {
                         add(VpnSessionEffect.CancelOperations(previousGeneration))
                     }
+                    add(VpnSessionEffect.WaitForUpstream(generation))
                 },
             )
         }

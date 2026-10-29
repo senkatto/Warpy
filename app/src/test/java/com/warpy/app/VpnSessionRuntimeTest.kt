@@ -554,6 +554,105 @@ class VpnSessionRuntimeTest {
         runtime.close()
     }
 
+    @Test
+    fun `network return resumes an established tunnel without another callback`() = runBlocking {
+        val operations = FakeOperations()
+        val runtime = newRuntime(this, operations)
+        try {
+            runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+            awaitState(runtime, VpnState.Connected)
+            runtime.dispatch(VpnSessionEvent.UpstreamChanged(false))
+            awaitNetworkCheck(operations)
+            assertEquals(VpnState.Recovering, runtime.snapshot().state)
+
+            operations.networkAvailable = true
+            awaitState(runtime, VpnState.Connected)
+            assertEquals(1, operations.calls.count { it.startsWith("start:") })
+            assertEquals(0, operations.calls.count { it.startsWith("stop:") })
+            assertEquals("validate:3:Recovery", operations.calls.last())
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun `network wait survives cancellation of startup and its monitor`() = runBlocking {
+        val startupStarted = CompletableDeferred<Unit>()
+        var starts = 0
+        val operations = FakeOperations(start = {
+            if (++starts == 1) {
+                startupStarted.complete(Unit)
+                CompletableDeferred<Unit>().await()
+            }
+        })
+        val runtime = newRuntime(this, operations)
+        try {
+            runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+            startupStarted.await()
+            runtime.dispatch(VpnSessionEvent.UpstreamChanged(false))
+            awaitNetworkCheck(operations)
+            operations.networkAvailable = true
+            awaitState(runtime, VpnState.Connected)
+            assertEquals(2, starts)
+            assertEquals("profile_0", runtime.snapshot().runtimeProfileTag)
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun `deferred initial recovery retries after network returns without a callback`() = runBlocking {
+        var validations = 0
+        val operations = FakeOperations(
+            validation = {
+                SessionValidationResult(succeeded = ++validations > 1, recoverable = true)
+            },
+            recovery = { ConnectionRecoveryResult.Deferred("Waiting for network") },
+        )
+        val runtime = newRuntime(this, operations)
+        try {
+            runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+            awaitNetworkCheck(operations)
+            assertEquals(VpnState.Recovering, runtime.snapshot().state)
+            operations.networkAvailable = true
+            awaitState(runtime, VpnState.Connected)
+            assertEquals(2, validations)
+            assertEquals(true, runtime.snapshot().shouldRun)
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun `stop while waiting for network prevents automatic reconnection`() = runBlocking {
+        val operations = FakeOperations()
+        val runtime = newRuntime(this, operations)
+        try {
+            runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+            awaitState(runtime, VpnState.Connected)
+            runtime.dispatch(VpnSessionEvent.UpstreamChanged(false))
+            awaitNetworkCheck(operations)
+            val waitingGeneration = runtime.snapshot().generation
+            runtime.dispatch(VpnSessionEvent.StopRequested)
+            awaitState(runtime, VpnState.Stopped)
+            val checksAfterStop = operations.networkChecks
+            operations.networkAvailable = true
+            runtime.dispatch(VpnSessionEvent.UpstreamAvailable(waitingGeneration))
+            delay(50L)
+            assertEquals(VpnState.Stopped, runtime.snapshot().state)
+            assertEquals(checksAfterStop, operations.networkChecks)
+            assertEquals(1, operations.calls.count { it.startsWith("start:") })
+        } finally {
+            runtime.close()
+        }
+    }
+
+    private suspend fun awaitNetworkCheck(operations: FakeOperations) {
+        withTimeout(2_000L) {
+            while (operations.networkChecks == 0) delay(5L)
+        }
+    }
+
     private fun newRuntime(
         scope: CoroutineScope,
         operations: FakeOperations,
@@ -561,6 +660,7 @@ class VpnSessionRuntimeTest {
         scope = scope,
         reducer = VpnSessionReducer(ElapsedClock { 5_000L }),
         operations = operations,
+        networkRetryDelayMillis = 10L,
     )
 
     private suspend fun awaitState(runtime: VpnSessionRuntime, state: VpnState) {
@@ -586,6 +686,7 @@ class VpnSessionRuntimeTest {
     }
 
     private class FakeOperations(
+        @Volatile var networkAvailable: Boolean = false,
         private val startFailure: Throwable? = null,
         private val start: suspend () -> Unit = {},
         private val validation: suspend () -> SessionValidationResult = {
@@ -599,6 +700,14 @@ class VpnSessionRuntimeTest {
         },
     ) : VpnSessionOperations {
         val calls = CopyOnWriteArrayList<String>()
+
+        var networkChecks = 0
+            private set
+
+        override fun hasUpstreamNetwork(): Boolean {
+            networkChecks++
+            return networkAvailable
+        }
 
         override suspend fun startCore(generation: Long, profileTag: String) {
             calls += "start:$generation:$profileTag"

@@ -49,8 +49,10 @@ secret file. Do not print them in a build log.
 ## Publishing a release
 
 1. Update Android `versionCode` and `versionName` in `app/build.gradle.kts`.
-2. Set the same public version in `desktop-tauri/package.json`,
-   `desktop-tauri/src-tauri/Cargo.toml`, and `desktop-tauri/src-tauri/tauri.conf.json`.
+2. Set the same public version in `desktop-tauri/package.json` and `package-lock.json`,
+   `desktop-tauri/src-tauri/Cargo.toml`, its own package entry in `Cargo.lock`, and
+   `desktop-tauri/src-tauri/tauri.conf.json`. Update `app.manifest` to `<version>.0`
+   and the CSS/JS version parameters in `desktop-tauri/src/index.html` as well.
 3. Add reviewed Russian release notes to `docs/releases/v<version>.md`.
 4. Build and test both clients locally. Do not publish yet.
 5. After explicit approval, commit and push the reviewed source.

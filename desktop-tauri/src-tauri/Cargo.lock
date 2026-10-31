@@ -4808,7 +4808,7 @@ dependencies = [
 
 [[package]]
 name = "warpy-desktop"
-version = "1.0.7"
+version = "1.0.8"
 dependencies = [
  "base64 0.22.1",
  "minisign-verify",

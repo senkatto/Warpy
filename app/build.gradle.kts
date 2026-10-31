@@ -136,8 +136,8 @@ android {
         applicationId = "com.warpy.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 24
-        versionName = "1.0.7"
+        versionCode = 25
+        versionName = "1.0.8"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += "arm64-v8a"

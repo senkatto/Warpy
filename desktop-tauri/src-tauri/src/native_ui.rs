@@ -542,6 +542,7 @@ mod tests {
         let context = Context::full(&runtime).unwrap();
         context.with(|ctx| {
             ctx.globals().set("__testStatus", status).unwrap();
+            ctx.globals().set("__testVersion", env!("CARGO_PKG_VERSION")).unwrap();
             ctx.globals().set("__testSettings",settings.to_string()).unwrap();
             ctx.globals().set("__nativeMeasureText",Function::new(ctx.clone(),painter::Painter::measure_text).unwrap()).unwrap();
             ctx.eval::<(),_>(r#"
@@ -578,7 +579,7 @@ mod tests {
                     if (request.name === 'get_vpn_network_stats') value = {available:false};
                     if (request.name === 'probe_profiles') value = [];
                     if (request.name === 'get_kill_switch_status') value = 'Off';
-                    if (request.name === 'get_app_version') value = '1.0.7';
+                    if (request.name === 'get_app_version') value = __testVersion;
                     __nativeResolve(request.id,true,value);
                 }
             "#).unwrap());

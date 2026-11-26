@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import java.net.Inet4Address
 import java.net.InetAddress
 
 internal interface NetworkObserver {
@@ -26,7 +27,7 @@ internal data class PhysicalNetworkState(
 
 internal class DefaultNetworkMonitor(
     context: Context,
-    private val onNetworkChanged: (PhysicalNetworkState?) -> Unit,
+    private val onNetworkChanged: () -> Unit,
 ) : NetworkObserver {
     private val connectivity =
         context.getSystemService(ConnectivityManager::class.java)
@@ -93,19 +94,8 @@ internal class DefaultNetworkMonitor(
         val nextState = candidates
             .mapNotNull { (network, candidate) ->
                 val capabilities = candidate.capabilities ?: return@mapNotNull null
-                if (candidate.linkProperties?.interfaceName.isNullOrBlank()) return@mapNotNull null
-                val isSuspended = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-                    !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
-                if (!isHandoverCandidatePhysicalNetwork(
-                        hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
-                        isSuspended = isSuspended,
-                        isVpn = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
-                        isBlocked = candidate.blocked,
-                    )
-                ) {
-                    return@mapNotNull null
-                }
                 PhysicalNetworkState(network, capabilities, candidate.linkProperties)
+                    .takeIf { it.isCandidate(candidate.blocked) }
             }
             .maxByOrNull { state ->
                 physicalNetworkPriority(
@@ -119,8 +109,8 @@ internal class DefaultNetworkMonitor(
                 )
             }
 
-        val previousKey = activeState?.monitorKey()
-        val nextKey = nextState?.monitorKey()
+        val previousKey = activeState?.toIdentity()
+        val nextKey = nextState?.toIdentity()
         activeState = nextState
         if (previousKey == nextKey) return
 
@@ -133,7 +123,7 @@ internal class DefaultNetworkMonitor(
                     "interface=${nextState.linkProperties?.interfaceName}",
             )
         }
-        onNetworkChanged(nextState)
+        onNetworkChanged()
     }
 
     @Synchronized
@@ -200,18 +190,25 @@ internal class DefaultNetworkMonitor(
     }
 }
 
-private data class MonitorStateKey(
-    val networkHandle: Long,
-    val interfaceName: String?,
-    val dnsServers: List<String>,
-    val isMetered: Boolean,
-    val isValidated: Boolean,
-)
+internal fun PhysicalNetworkState.isCandidate(isBlocked: Boolean = false): Boolean =
+    !linkProperties?.interfaceName.isNullOrBlank() && isHandoverCandidatePhysicalNetwork(
+        hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+        isSuspended = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED),
+        isVpn = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
+        isBlocked = isBlocked,
+        hasDefaultRoute = linkProperties?.routes.orEmpty().any { it.isDefaultRoute },
+        isCaptivePortal = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL),
+    )
 
-private fun PhysicalNetworkState.monitorKey(): MonitorStateKey = MonitorStateKey(
+internal fun PhysicalNetworkState.toIdentity(): UpstreamIdentity = UpstreamIdentity(
     networkHandle = network.networkHandle,
     interfaceName = linkProperties?.interfaceName,
     dnsServers = linkProperties?.dnsServers.orEmpty().mapNotNull(InetAddress::getHostAddress),
     isMetered = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED),
+    ipv4Addresses = linkProperties?.linkAddresses.orEmpty()
+        .filter { it.address is Inet4Address }.map { it.toString() }.toSet(),
+    defaultRoutes = linkProperties?.routes.orEmpty().filter { it.isDefaultRoute }
+        .map { "${it.destination}:${it.gateway?.hostAddress.orEmpty()}" }.toSet(),
     isValidated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
 )

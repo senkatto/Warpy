@@ -53,6 +53,8 @@ class ConnectionRecoveryPolicyTest {
         assertFalse(isHandoverCandidatePhysicalNetwork(true, true, false, false))
         assertFalse(isHandoverCandidatePhysicalNetwork(true, false, true, false))
         assertFalse(isHandoverCandidatePhysicalNetwork(true, false, false, true))
+        assertFalse(isHandoverCandidatePhysicalNetwork(true, false, false, false, hasDefaultRoute = false))
+        assertFalse(isHandoverCandidatePhysicalNetwork(true, false, false, false, isCaptivePortal = true))
     }
 
     @Test
@@ -78,6 +80,20 @@ class ConnectionRecoveryPolicyTest {
         assertFalse(wifi.hasSameConnection(wifi.copy(networkHandle = 152L)))
         assertFalse(wifi.hasSameConnection(wifi.copy(interfaceName = "rmnet0")))
         assertFalse(wifi.hasSameConnection(null))
+    }
+
+    @Test
+    fun `renewed wifi address or gateway invalidates the existing tunnel path`() {
+        val wifi = UpstreamIdentity(
+            151L,
+            "wlan0",
+            ipv4Addresses = setOf("192.168.1.8/24"),
+            defaultRoutes = setOf("0.0.0.0/0:192.168.1.1", "::/0:fe80::1"),
+            isValidated = true,
+        )
+        assertFalse(wifi.hasSameConnection(wifi.copy(ipv4Addresses = setOf("192.168.1.9/24"))))
+        assertFalse(wifi.hasSameConnection(wifi.copy(defaultRoutes = setOf("0.0.0.0/0:192.168.1.2"))))
+        assertTrue(wifi.hasSameConnection(wifi.copy(isValidated = false, isMetered = true)))
     }
 
     @Test

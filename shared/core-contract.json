@@ -37,7 +37,7 @@
     "windows": {
       "interfaceName": "warpy-tun",
       "localDnsServer": "8.8.8.8",
-      "addresses": ["172.29.99.1/30"],
+      "addresses": ["172.29.99.1/30", "fdfe:dcba:9877::1/126"],
       "stack": "mixed",
       "strictRoute": true,
       "defaultMtu": 1400,

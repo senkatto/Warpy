@@ -294,6 +294,32 @@ test('excludes an IP VPN endpoint from the Windows TUN route', () => {
   assert.deepEqual(buildSingBoxConfig(profile).inbounds[0].route_exclude_address, ['203.0.113.10/32']);
 });
 
+test('captures IPv6 traffic while keeping an IPv6 VPN endpoint outside the TUN', () => {
+  const profile = parseProfileLink(
+    'vless://00000000-0000-4000-8000-000000000000@[2001:db8::10]:8443'
+      + '?security=reality&sni=www.example.com&pbk=public-key&sid=0123abcd&type=tcp#IPv6',
+  );
+
+  for (const config of [buildSingBoxConfig(profile, { lan: true }), buildRuntimeSingBoxConfig([profile], 0, { lan: true }).config]) {
+    const tun = config.inbounds.find(inbound => inbound.type === 'tun');
+    assert.ok(tun.address.some(address => address.includes(':')), 'IPv6 traffic must enter the TUN');
+    assert.ok(tun.route_exclude_address.includes('2001:db8::10/128'));
+    const endpointRule = config.route.rules.findIndex(
+      rule => rule.outbound === 'direct' && rule.ip_cidr?.includes('2001:db8::10'),
+    );
+    const ipv6Reject = config.route.rules.findIndex(
+      rule => rule.action === 'reject' && rule.ip_cidr?.includes('::/0'),
+    );
+    assert.ok(endpointRule >= 0 && ipv6Reject > endpointRule);
+    const sniff = config.route.rules.findIndex(rule => rule.action === 'sniff');
+    const ipv6Dns = config.route.rules.findIndex(rule => rule.ip_version === 6 && rule.action === 'hijack-dns');
+    const ipv6Lan = config.route.rules.findIndex(rule => rule.ip_version === 6 && rule.ip_is_private && rule.outbound === 'direct');
+    assert.ok(ipv6Dns >= 0 && ipv6Dns < ipv6Lan && ipv6Lan < ipv6Reject);
+    assert.ok(ipv6Reject < sniff, 'unsupported IPv6 must fail before the TCP connection is accepted for sniffing');
+    assert.equal(config.route.rules[ipv6Reject].no_drop, true);
+  }
+});
+
 test('does not hold new connections for a one-second protocol sniff', () => {
   const profile = parseProfileLink(
     'vless://00000000-0000-4000-8000-000000000000@example.com:443'

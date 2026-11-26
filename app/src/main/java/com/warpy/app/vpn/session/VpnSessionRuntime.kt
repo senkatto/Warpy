@@ -159,6 +159,16 @@ internal class VpnSessionRuntime(
                 throw cancelled
             } catch (error: Throwable) {
                 val generation = start?.generation ?: return@launch
+                // The service has already closed a partially started core. A network
+                // disappearing during that start must not clear the user's run intent.
+                if (generateSequence(error) { it.cause }.any { it is IOException } &&
+                    !operations.hasUpstreamNetwork()
+                ) {
+                    controller.dispatch(
+                        VpnSessionEvent.RecoveryDeferred(generation, "Ожидание сети"),
+                    )
+                    return@launch
+                }
                 controller.dispatch(
                     VpnSessionEvent.ValidationFailed(
                         generation = generation,

@@ -14,7 +14,19 @@ class TunnelSiteNormalizationTest {
     }
 
     @Test
+    fun `accepts top level domain suffixes`() {
+        assertEquals("ru", normalizeTunnelSite("ru"))
+        assertEquals("ru", normalizeTunnelSite(" .RU. "))
+        assertEquals("su", normalizeTunnelSite("su"))
+        assertEquals("com", normalizeTunnelSite("com"))
+        assertEquals("xn--p1ai", normalizeTunnelSite("xn--p1ai"))
+    }
+
+    @Test
     fun `rejects invalid site values`() {
         assertNull(normalizeTunnelSite("not-a-domain"))
+        assertNull(normalizeTunnelSite("r"))
+        assertNull(normalizeTunnelSite("ru com"))
+        assertNull(normalizeTunnelSite(""))
     }
 }

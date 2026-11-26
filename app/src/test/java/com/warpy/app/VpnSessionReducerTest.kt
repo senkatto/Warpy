@@ -324,7 +324,7 @@ class VpnSessionReducerTest {
     }
 
     @Test
-    fun `network loss recovers without inventing a new connected session`() {
+    fun `network return rebuilds the core and TUN before validating the replacement`() {
         val connected = connectedSession("profile_0")
         val lost = reducer.reduce(
             connected,
@@ -336,7 +336,7 @@ class VpnSessionReducerTest {
         )
 
         assertEquals(VpnState.Recovering, lost.snapshot.state)
-        assertEquals(connected.connectedAtElapsedMillis, lost.snapshot.connectedAtElapsedMillis)
+        assertEquals(0L, lost.snapshot.connectedAtElapsedMillis)
         assertEquals(connected.generation + 1L, lost.snapshot.generation)
         assertEquals(
             listOf(
@@ -345,13 +345,16 @@ class VpnSessionReducerTest {
             ),
             lost.effects,
         )
-        assertEquals(VpnState.Validating, available.snapshot.state)
+        assertEquals(VpnState.Recovering, available.snapshot.state)
+        assertEquals(null, available.snapshot.runtimeProfileTag)
+        assertEquals(0L, available.snapshot.connectedAtElapsedMillis)
         assertEquals(
             listOf(
                 VpnSessionEffect.CancelOperations(lost.snapshot.generation),
-                VpnSessionEffect.ValidateTunnel(
+                VpnSessionEffect.StopCore(lost.snapshot.generation),
+                VpnSessionEffect.StartCore(
                     available.snapshot.generation,
-                    ValidationReason.Recovery,
+                    "profile_0",
                 ),
             ),
             available.effects,

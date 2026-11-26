@@ -851,8 +851,12 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
     });
   }
   rules.push(
-    { inbound: [TAGS.tun], action: 'sniff', timeout: '300ms' },
     directServerRule(profile),
+    { inbound: [TAGS.tun], ip_version: 6, port: 53, action: 'hijack-dns' },
+    ...(settings.lan ? [{ ip_version: 6, ip_is_private: true, action: 'route', outbound: TAGS.direct }] : []),
+    // Refuse IPv6 before TLS sniffing so clients can retry IPv4 at connect time.
+    { ip_cidr: ['::/0'], action: 'reject', method: 'default', no_drop: true },
+    { inbound: [TAGS.tun], action: 'sniff', timeout: '300ms' },
     { protocol: 'dns', action: 'hijack-dns' },
     // The Google HE IPv6 route rejects QUIC on the server. Reject locally so
     // browsers immediately retry over TCP instead of waiting for UDP timeouts.
@@ -905,7 +909,6 @@ export function buildSingBoxConfig(inputProfile, settings = {}) {
     config.route.final = TAGS.direct;
   }
 
-  rules.push({ ip_cidr: ['::/0'], action: 'reject' });
   config.route.rules = rules;
   return config;
 }

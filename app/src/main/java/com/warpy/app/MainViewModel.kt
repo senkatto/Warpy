@@ -580,12 +580,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         clearCommandError()
     }
 
-    fun applyServiceConnecting() {
+    fun applyServiceConnecting(message: String) {
         _state.value = _state.value.copy(
             vpnStartPending = false,
             diagnostics = _state.value.diagnostics.copy(
                 status = VpnStatus.Connecting,
-                message = "Подключение...",
+                message = message,
+                connectedAtMillis = 0L,
+                uptimeText = "",
             ),
             commandError = null,
         )
@@ -602,18 +604,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?: current.connectedAtMillis
                 .takeIf { current.status == VpnStatus.Connected && it > 0L }
             ?: SystemClock.elapsedRealtime()
-        var settingsPersistenceFailed = false
-        val settings = _state.value.settings.let { currentSettings ->
-            if (runtimeProfileIndex in currentSettings.profiles.indices &&
-                runtimeProfileIndex != currentSettings.activeProfileIndex
-            ) {
-                currentSettings.copy(activeProfileIndex = runtimeProfileIndex).also { nextSettings ->
-                    settingsPersistenceFailed = !store.save(nextSettings)
-                }
-            } else {
-                currentSettings
-            }
-        }
+        val settings = store.load()
+        applySettingsSnapshot(settings)
         _state.value = _state.value.copy(
             settings = settings,
             diagnostics = current.copy(
@@ -623,11 +615,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 runtimeProfileIndex = runtimeProfileIndex.takeIf { it in settings.profiles.indices },
             ),
             vpnStartPending = false,
-            commandError = if (settingsPersistenceFailed) {
-                "Не удалось сохранить выбранный профиль"
-            } else {
-                null
-            },
+            commandError = null,
         )
         updateConnectionStats()
     }
@@ -810,7 +798,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun updateSettings(settings: AppSettings): Boolean {
-        val profilesChanged = settings.profiles != _state.value.settings.profiles
         val normalizedSettings = settings.copy(
             activeProfileIndex = settings.activeProfileIndex.coerceIn(0, settings.profiles.lastIndex.coerceAtLeast(0))
         )
@@ -818,16 +805,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             fail("Не удалось сохранить настройки")
             return false
         }
+        applySettingsSnapshot(normalizedSettings)
+        return true
+    }
+
+    private fun applySettingsSnapshot(settings: AppSettings) {
+        val profilesChanged = settings.profiles != _state.value.settings.profiles
         if (profilesChanged) cancelProfileProbes()
         _state.value = _state.value.copy(
-            settings = normalizedSettings,
+            settings = settings,
             profileProbes = if (profilesChanged) emptyMap() else _state.value.profileProbes,
         )
         if (profilesChanged) {
             profileProbeCheckedAt = 0L
             profileProbeProfiles = emptyList()
         }
-        return true
     }
 
     private fun regenerateConfig() {
@@ -1198,7 +1190,8 @@ internal fun normalizeTunnelSite(value: String): String? {
         .substringBefore('/')
         .substringBefore(':')
         .trim('.')
-    return host.takeIf { it.isNotBlank() && it.contains('.') && it.none(Char::isWhitespace) }
+    val isDomainSuffix = host.contains('.') || host.matches(Regex("[a-z]{2,63}|xn--[a-z0-9-]{1,59}"))
+    return host.takeIf { it.isNotBlank() && isDomainSuffix && it.none(Char::isWhitespace) }
 }
 
 internal fun AppSettings.removeProfile(index: Int): AppSettings? {

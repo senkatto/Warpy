@@ -129,7 +129,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     @Volatile private var localProxyConfig: LocalProxyConfig? = null
     @Volatile private var activeOutboundTag: String? = null
     @Volatile private var lastProbeFailure: String? = null
-    private var lastUpstreamIdentity: UpstreamIdentity? = null
+    @Volatile private var lastUpstreamIdentity: UpstreamIdentity? = null
     private var stabilityMode = true
     @Volatile private var explicitStopRequested = false
     @Volatile private var closingCore = false
@@ -140,6 +140,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         override fun onStart(owner: LifecycleOwner) {
             uiVisible = true
             refreshTrafficStatsSubscription()
+            scheduleWakeConnectionProbeInternal("foreground")
         }
 
         override fun onStop(owner: LifecycleOwner) {
@@ -148,7 +149,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         }
     }
     private var lastWakeProbeAt = 0L
-    private var lastScreenOffAt = 0L
     private var networkMonitor: NetworkObserver? = null
     private var screenReceiver: BroadcastReceiver? = null
     private val wakeProbeJobOwner = CancellableJobOwner(serviceScope)
@@ -264,6 +264,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_SELECT_OUTBOUND -> {
+                startForeground()
                 val tag = intent.getStringExtra(EXTRA_OUTBOUND_TAG).orEmpty()
                 if (tag.isNotBlank()) {
                     cancelWakeProbeWork()
@@ -330,6 +331,9 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
                     stopSelf()
                     return Service.START_NOT_STICKY
                 }
+                // A previous core may take time to close; satisfy the foreground
+                // service deadline before queueing work behind that teardown.
+                startForeground()
                 explicitStopRequested = false
                 val config = if (intent?.hasExtra(EXTRA_CONFIG) == true) {
                     intent.getStringExtra(EXTRA_CONFIG).orEmpty().also { saveLastConfig(it) }
@@ -402,7 +406,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             val previousIsValid = runConnectionProbe()
             ensureSessionOperationCurrent(generation)
             return if (previousIsValid &&
-                persistSelectedProfileForSession(generation, previousRuntimeProfileTag)
+                persistSelectedProfileForSession(generation, previousRuntimeProfileTag, settings)
             ) {
                 OutboundSwitchResult.RolledBack("Не удалось выбрать новый профиль")
             } else {
@@ -418,7 +422,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         val isValid = runConnectionProbe()
         ensureSessionOperationCurrent(generation)
         if (isValid) {
-            if (persistSelectedProfileForSession(generation, profileTag)) {
+            if (persistSelectedProfileForSession(generation, profileTag, settings)) {
                 Log.i(TAG, "Dynamic switch validation success for outbound $profileTag")
                 return OutboundSwitchResult.Succeeded(profileTag)
             }
@@ -428,7 +432,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             val rollbackValid = rollbackSelected && runConnectionProbe()
             ensureSessionOperationCurrent(generation)
             return if (rollbackValid &&
-                persistSelectedProfileForSession(generation, previousRuntimeProfileTag)
+                persistSelectedProfileForSession(generation, previousRuntimeProfileTag, settings)
             ) {
                 OutboundSwitchResult.RolledBack("Не удалось сохранить выбранный профиль")
             } else {
@@ -444,7 +448,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         val rollbackValid = rollbackSelected && runConnectionProbe()
         ensureSessionOperationCurrent(generation)
         return if (rollbackValid &&
-            persistSelectedProfileForSession(generation, previousRuntimeProfileTag)
+            persistSelectedProfileForSession(generation, previousRuntimeProfileTag, settings)
         ) {
             OutboundSwitchResult.RolledBack(
                 "Не удалось подключиться к новому профилю",
@@ -469,10 +473,14 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             }
         }
 
-    private suspend fun persistSelectedProfileForSession(generation: Long, tag: String): Boolean =
+    private suspend fun persistSelectedProfileForSession(
+        generation: Long,
+        tag: String,
+        expectedSettings: com.warpy.app.model.AppSettings,
+    ): Boolean =
         stateMutex.withLock {
             ensureSessionOperationCurrent(generation)
-            persistSelectedProfile(tag)
+            persistSelectedProfile(tag, expectedSettings)
         }
 
     private suspend fun ensureSessionOperationCurrent(generation: Long) {
@@ -488,19 +496,18 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         }
     }
 
-    private fun persistSelectedProfile(tag: String): Boolean {
+    private fun persistSelectedProfile(tag: String, expectedSettings: com.warpy.app.model.AppSettings): Boolean {
         val index = tag.removePrefix("profile_").toIntOrNull() ?: return false
         val store = com.warpy.app.data.SettingsStore(this)
-        val currentSettings = store.load()
-        if (index !in currentSettings.profiles.indices) return false
-        val selectedSettings = currentSettings.copy(activeProfileIndex = index)
+        if (index !in expectedSettings.profiles.indices) return false
+        val selectedSettings = expectedSettings.copy(activeProfileIndex = index)
         val selectedConfig = runCatching {
             SingBoxConfigBuilder.build(selectedSettings, filesDir = filesDir.absolutePath)
         }.getOrElse { error ->
             Log.e(TAG, "failed to build persisted profile configuration", error)
             return false
         }
-        if (!store.save(selectedSettings)) {
+        if (!store.saveSelectedProfile(index, expectedSettings)) {
             Log.e(TAG, "failed to persist selected profile index=$index")
             return false
         }
@@ -582,7 +589,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             delay(3_000)
         }
 
-        val isValid = hasActiveVpnTunnel() && runConnectionProbe()
+        val isValid = runConnectionProbe()
 
         return if (isValid) {
             startStatusUpdates()
@@ -612,8 +619,12 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         connectTimeoutMillis: Int = INITIAL_PROBE_TIMEOUT_MS,
         readTimeoutMillis: Int = INITIAL_PROBE_TIMEOUT_MS,
     ): Boolean = probeMutex.withLock {
-        val proxyConfig = localProxyConfig ?: return false
         lastProbeFailure = null
+        if (!hasActiveVpnTunnel()) {
+            lastProbeFailure = "Android VPN interface is unavailable"
+            return false
+        }
+        val proxyConfig = localProxyConfig ?: return false
         val result = tunnelValidator.validate(
             TunnelValidationRequest(
                 proxy = proxyConfig,
@@ -630,7 +641,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             }
         }
         lastProbeFailure = result.lastFailure?.let(::stripAnsi)
-        result.isValid
+        result.isValid && hasActiveVpnTunnel()
     }
 
     private fun stopCore(clearSavedConfig: Boolean = false) {
@@ -786,7 +797,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         }
         resources.screenReceiver?.let { runCatching { unregisterReceiver(it) } }
         resources.networkMonitor?.stop()
-        lastScreenOffAt = 0L
         upstreamNetwork = null
         lastUpstreamIdentity = null
         setActiveOutboundTag(null)
@@ -795,10 +805,11 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         }
     }
 
-    private fun onPhysicalNetworkChanged(state: PhysicalNetworkState?) {
+    private fun onPhysicalNetworkChanged() {
         networkChangeJobOwner.launch {
             delay(NETWORK_CHANGE_DEBOUNCE_MS)
-            handlePhysicalNetworkChanged(state)
+            val monitor = networkMonitor ?: return@launch
+            handlePhysicalNetworkChanged(monitor.currentState())
         }
     }
 
@@ -811,12 +822,12 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
 
         val identity = state?.toIdentity()
         if (identity != null && identity == lastUpstreamIdentity) {
-            Log.d(TAG, "Duplicate validated network event for $identity. Ignoring.")
+            Log.d(TAG, "Duplicate physical network event for $identity. Ignoring.")
             return
         }
 
         if (state == null) {
-            Log.i(TAG, "Validated physical network lost; waiting without tearing down the VPN")
+            Log.i(TAG, "Physical network lost; waiting without tearing down the VPN")
             lastUpstreamIdentity = null
             upstreamNetwork = null
             runCatching { setUnderlyingNetworks(emptyArray()) }
@@ -832,10 +843,11 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         Log.i(TAG, "Physical network updated to $identity")
         lastUpstreamIdentity = identity
         upstreamNetwork = state.network
-        if (sameConnection) return
-        updateUpstreamNetwork(state.network)
-        resetCoreNetwork("upstream-changed")
-        closeTunnelConnections("upstream-changed")
+        if (sameConnection) {
+            if (identity?.isValidated == true) scheduleWakeConnectionProbeInternal("network")
+            return
+        }
+        Log.i(TAG, "Rebuilding VPN session for physical network handoff")
         sessionRuntime().dispatch(
             VpnSessionEvent.UpstreamChanged(available = true),
         )
@@ -1053,17 +1065,8 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
                     when (intent?.action) {
-                        Intent.ACTION_SCREEN_OFF -> {
-                            lastScreenOffAt = SystemClock.elapsedRealtime()
-                        }
                         Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
-                            val now = SystemClock.elapsedRealtime()
-                            val screenOffMillis = lastScreenOffAt
-                                .takeIf { it > 0L }
-                                ?.let { (now - it).coerceAtLeast(0L) }
-                                ?: 0L
-                            lastScreenOffAt = 0L
-                            scheduleWakeConnectionProbeInternal("screen", screenOffMillis)
+                            scheduleWakeConnectionProbeInternal("screen")
                         }
                     }
                 }
@@ -1081,7 +1084,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
                     registerReceiver(
                         receiver,
                         IntentFilter().apply {
-                            addAction(Intent.ACTION_SCREEN_OFF)
                             addAction(Intent.ACTION_SCREEN_ON)
                             addAction(Intent.ACTION_USER_PRESENT)
                         },
@@ -1129,7 +1131,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         }
     }
 
-    private fun scheduleWakeConnectionProbeInternal(reason: String, screenOffMillis: Long) {
+    private fun scheduleWakeConnectionProbeInternal(reason: String) {
         val now = SystemClock.elapsedRealtime()
         if (!stabilityMode ||
             commandServer == null ||
@@ -1139,18 +1141,13 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         lastWakeProbeAt = now
         wakeProbeJobOwner.launch {
             delay(WAKE_PROBE_DELAY_MS)
-            if (commandServer == null || vpnState != VpnState.Connected) return@launch
-
+            val runtime = sessionRuntime ?: return@launch
+            val snapshot = runtime.snapshot()
+            if (commandServer == null || snapshot.state != VpnState.Connected) return@launch
             val currentNetwork = findUpstreamNetwork()
-            if (currentNetwork == null) {
-                Log.i(TAG, "Skipping wake probe until Android validates the physical network")
-                return@launch
-            }
-            upstreamNetwork = currentNetwork
-            updateDefaultInterface(currentNetwork)
 
             Log.i(TAG, "checking tunnel after wake reason=$reason")
-            val isValid = runConnectionProbe(
+            val isValid = currentNetwork != null && runConnectionProbe(
                 maxRetries = WAKE_PROBE_RETRIES,
                 connectTimeoutMillis = WAKE_PROBE_TIMEOUT_MS,
                 readTimeoutMillis = WAKE_PROBE_TIMEOUT_MS,
@@ -1159,10 +1156,9 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
                 Log.i(TAG, "wake tunnel check succeeded")
             } else {
                 Log.w(TAG, "wake tunnel check failed; scheduling bounded recovery")
-                val runtime = sessionRuntime()
                 runtime.dispatch(
                     VpnSessionEvent.RecoveryRequested(
-                        generation = runtime.snapshot().generation,
+                        generation = snapshot.generation,
                         request = RecoveryRequest(
                             reason = "$reason/wake",
                             probeBeforeRefresh = false,
@@ -1595,7 +1591,7 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
             VpnState.Starting -> MESSAGE_STARTING
             VpnState.Validating -> MESSAGE_CHECKING_PROFILE
             VpnState.Connected -> snapshot.lastError ?: MESSAGE_CONNECTED
-            VpnState.Recovering -> MESSAGE_RESTORING
+            VpnState.Recovering -> if (snapshot.lastError == "Ожидание сети") "Ожидание сети" else MESSAGE_RESTORING
             VpnState.Stopping -> "Остановка VPN"
             VpnState.Error -> snapshot.lastError ?: "Не удалось подключиться"
         }
@@ -1712,12 +1708,11 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
                     continue
                 }
 
-                if (findUpstreamNetwork() == null) {
-                    consecutiveFailures = 0
-                    continue
-                }
-
-                val isValid = runConnectionProbe(
+                val runtime = sessionRuntime ?: return@launch
+                val snapshot = runtime.snapshot()
+                if (snapshot.state != VpnState.Connected || !snapshot.shouldRun) continue
+                val hasUpstream = findUpstreamNetwork() != null
+                val isValid = hasUpstream && runConnectionProbe(
                     maxRetries = TUNNEL_WATCHDOG_PROBE_RETRIES,
                     connectTimeoutMillis = TUNNEL_WATCHDOG_PROBE_TIMEOUT_MS,
                     readTimeoutMillis = TUNNEL_WATCHDOG_PROBE_TIMEOUT_MS,
@@ -1729,23 +1724,19 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
 
                 consecutiveFailures += 1
                 Log.w(TAG, "background tunnel probe failed ($consecutiveFailures/$TUNNEL_WATCHDOG_FAILURES)")
-                if (consecutiveFailures < TUNNEL_WATCHDOG_FAILURES) continue
-
-                val runtime = sessionRuntime()
-                val snapshot = runtime.snapshot()
-                if (snapshot.state == VpnState.Connected && snapshot.shouldRun) {
-                    runtime.dispatch(
-                        VpnSessionEvent.RecoveryRequested(
-                            generation = snapshot.generation,
-                            request = RecoveryRequest(
-                                reason = "background-watchdog",
-                                probeBeforeRefresh = false,
-                                resetConnectionsOnSuccess = true,
-                            ),
+                if (hasUpstream && consecutiveFailures < TUNNEL_WATCHDOG_FAILURES) continue
+                runtime.dispatch(
+                    VpnSessionEvent.RecoveryRequested(
+                        generation = snapshot.generation,
+                        request = RecoveryRequest(
+                            reason = "background-watchdog",
+                            probeBeforeRefresh = false,
+                            resetConnectionsOnSuccess = true,
                         ),
-                    )
-                }
-                return@launch
+                    ),
+                )
+                // Keep monitoring if a conflicting operation made the probe stale.
+                consecutiveFailures = 0
             }
         }
     }
@@ -1899,21 +1890,8 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
         return connectivity.allNetworks
             .mapNotNull { network ->
                 val caps = connectivity.getNetworkCapabilities(network) ?: return@mapNotNull null
-                if (connectivity.getLinkProperties(network)?.interfaceName.isNullOrBlank()) {
-                    return@mapNotNull null
-                }
-                val suspended = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-                    !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
-                if (!isHandoverCandidatePhysicalNetwork(
-                        hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
-                        isSuspended = suspended,
-                        isVpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN),
-                        isBlocked = false,
-                    )
-                ) {
-                    return@mapNotNull null
-                }
-                network to caps
+                val state = PhysicalNetworkState(network, caps, connectivity.getLinkProperties(network))
+                (network to caps).takeIf { state.isCandidate() }
             }
             .maxByOrNull { (network, caps) ->
                 physicalNetworkPriority(
@@ -2087,13 +2065,6 @@ class WarpyService : VpnService(), PlatformInterface, CommandServerHandler {
 private fun RoutePrefix.toIpPrefix(): IpPrefix {
     return IpPrefix(InetAddress.getByName(address()), prefix())
 }
-
-private fun PhysicalNetworkState.toIdentity(): UpstreamIdentity = UpstreamIdentity(
-    networkHandle = network.networkHandle,
-    interfaceName = linkProperties?.interfaceName,
-    dnsServers = linkProperties?.dnsServers.orEmpty().mapNotNull(InetAddress::getHostAddress),
-    isMetered = !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED),
-)
 
 private inline fun RoutePrefixIterator.forEachRoute(action: (RoutePrefix) -> Unit) {
     while (hasNext()) {

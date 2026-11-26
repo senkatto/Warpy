@@ -1,7 +1,14 @@
 #![cfg(windows)]
 
 use serde_json::{json, Value};
-use std::{ffi::c_void, net::TcpListener, os::windows::ffi::OsStrExt, ptr, time::Duration};
+use std::{
+    ffi::c_void,
+    net::{Ipv4Addr, TcpListener, UdpSocket},
+    os::windows::ffi::OsStrExt,
+    ptr,
+    sync::atomic::{AtomicU16, Ordering},
+    time::Duration,
+};
 use windows_sys::Win32::Networking::WinHttp::{
     WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders,
     WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetCredentials, WinHttpSetTimeouts,
@@ -17,6 +24,8 @@ const PROBE_TARGETS: [(&str, &str); 2] = [
 ];
 const PROBE_ATTEMPTS: usize = 3;
 const PROBE_RETRY_DELAY: Duration = Duration::from_millis(600);
+const TUN_DNS_QUERY_HEADER: &[u8] = b"\0\0\x01\0\0\x01\0\0\0\0\0\0";
+static TUN_DNS_QUERY_ID: AtomicU16 = AtomicU16::new(1);
 
 #[derive(Clone)]
 pub(crate) struct TunnelProbe {
@@ -64,6 +73,48 @@ pub(crate) fn verify_tunnel(probe: &TunnelProbe) -> Result<(), String> {
 
 pub(crate) fn verify_tunnel_once(probe: &TunnelProbe) -> Result<(), String> {
     verify_tunnel_with_attempts(probe, 1)
+}
+
+pub(crate) fn verify_system_tun() -> Result<(), String> {
+    // The TUN peer exists only on Warpy's private /30. Binding the source and
+    // querying that peer exercises the system adapter and sing-box DNS hijack.
+    probe_targets(|server, _| verify_tun_dns(server))
+}
+
+fn verify_tun_dns(server: &str) -> Result<(), String> {
+    let verify = || -> std::io::Result<bool> {
+        let socket = UdpSocket::bind((Ipv4Addr::new(172, 29, 99, 1), 0))?;
+        socket.set_read_timeout(Some(Duration::from_secs(2)))?;
+        socket.connect((Ipv4Addr::new(172, 29, 99, 2), 53))?;
+        let id = TUN_DNS_QUERY_ID
+            .fetch_add(1, Ordering::Relaxed)
+            .to_be_bytes();
+        let mut request = TUN_DNS_QUERY_HEADER.to_vec();
+        request[..2].copy_from_slice(&id);
+        for label in server.split('.') {
+            request.push(label.len() as u8);
+            request.extend_from_slice(label.as_bytes());
+        }
+        request.extend_from_slice(b"\0\0\x01\0\x01"); // root label, A, IN
+        socket.send(&request)?;
+        let mut reply = [0u8; 512];
+        let size = socket.recv(&mut reply)?;
+        Ok(is_tun_dns_reply(&reply[..size], id))
+    };
+    match verify() {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("Некорректный ответ DNS через интерфейс VPN".into()),
+        Err(error) => Err(format!("Нет ответа DNS через интерфейс VPN: {error}")),
+    }
+}
+
+fn is_tun_dns_reply(reply: &[u8], id: [u8; 2]) -> bool {
+    reply.len() > 12
+        && reply[..2] == id
+        && reply[2] & 0xfa == 0x80 // response, standard query, not truncated
+        && reply[3] & 0x0f == 0
+        && reply[4..6] == [0, 1]
+        && (reply[6] != 0 || reply[7] != 0)
 }
 
 fn verify_tunnel_with_attempts(probe: &TunnelProbe, attempts: usize) -> Result<(), String> {
@@ -239,6 +290,26 @@ impl Drop for WinHttpHandle {
 mod tests {
     use super::{configure_tunnel_probe, successful_probe_status};
     use serde_json::json;
+
+    #[test]
+    fn tun_probe_requires_a_matching_successful_dns_answer() {
+        let id = [0x57, 0x91];
+        let mut response = [0x57, 0x91, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0, 0];
+        assert!(super::is_tun_dns_reply(&response, id));
+        assert!(!super::is_tun_dns_reply(&response, [0x57, 0x92]));
+        assert!(!super::is_tun_dns_reply(&response[..11], id));
+        response[3] = 0x83;
+        assert!(!super::is_tun_dns_reply(&response, id));
+        response[3] = 0x80;
+        response[7] = 0;
+        assert!(!super::is_tun_dns_reply(&response, id));
+    }
+
+    #[test]
+    #[ignore = "requires a connected Warpy TUN; sends a read-only DNS probe"]
+    fn live_windows_tun_passes_dns_probe() {
+        super::verify_system_tun().unwrap();
+    }
 
     #[test]
     fn one_blocked_endpoint_does_not_mark_a_working_tunnel_down() {

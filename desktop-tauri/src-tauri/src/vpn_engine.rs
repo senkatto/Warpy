@@ -452,7 +452,7 @@ impl VpnEngine {
         }
 
         if state == EngineState::Connected {
-            let healthy = self.verify_tunnel(false).is_ok();
+            let healthy = self.verify_tunnel(true).is_ok();
             if !self.recovery.lock().ok()?.record_health(healthy) {
                 return None;
             }
@@ -628,10 +628,11 @@ impl VpnEngine {
             .clone()
             .ok_or_else(|| "VPN probe is not ready".to_string())?;
         if once {
-            crate::vpn_probe::verify_tunnel_once(&probe)
+            crate::vpn_probe::verify_tunnel_once(&probe)?;
         } else {
-            crate::vpn_probe::verify_tunnel(&probe)
+            crate::vpn_probe::verify_tunnel(&probe)?;
         }
+        crate::vpn_probe::verify_system_tun()
     }
 
     #[cfg(windows)]
@@ -668,9 +669,11 @@ impl VpnEngine {
             self.ensure_start_not_cancelled()?;
             match control.probe_outbound(&outbound) {
                 Ok(_) => {
-                    // Both checks use the selected proxy; WinHTTP may still be warming up.
-                    let _ = self.verify_tunnel(true);
-                    return Ok(());
+                    // A working proxy can coexist with a broken Windows TUN.
+                    match crate::vpn_probe::verify_system_tun() {
+                        Ok(()) => return Ok(()),
+                        Err(error) => last_error = error,
+                    }
                 }
                 Err(error) => last_error = error,
             }

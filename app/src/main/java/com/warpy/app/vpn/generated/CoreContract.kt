@@ -2,7 +2,7 @@
 package com.warpy.app.vpn.generated
 
 internal object CoreContract {
-    const val SOURCE_SHA256 = "e212242b2e63fd3b2ba33f369f73afea17d68e2bca81d1a4a09b840ae4e188c3"
+    const val SOURCE_SHA256 = "0143c69faa2471090310a363855cac283bb80cf58dd1e621cc93eb72bafe7b28"
     const val VERSION = 1
     val protocols = setOf("vless", "trojan", "hysteria2", "vmess", "shadowsocks", "socks", "wireguard", "tuic", "hysteria", "naive")
     val transports = setOf("tcp", "raw", "ws", "grpc", "http", "httpupgrade", "xhttp")
@@ -44,7 +44,7 @@ internal object CoreContract {
 
     object Windows {
         const val interfaceName = "warpy-tun"
-        val addresses = listOf("172.29.99.1/30")
+        val addresses = listOf("172.29.99.1/30", "fdfe:dcba:9877::1/126")
         const val stack = "mixed"
         const val strictRoute = true
         const val defaultMtu = 1400

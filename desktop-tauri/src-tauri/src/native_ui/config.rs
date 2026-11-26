@@ -525,7 +525,6 @@ pub(super) fn selectable(
         rule["process_name"] = assets["browsers"].clone();
         rules.push(rule);
     }
-    rules.push(json!({"inbound":["tun-in"],"action":"sniff","timeout":"300ms"}));
     let mut seen = HashSet::new();
     for p in &profiles {
         let rule = server_rule(p);
@@ -533,6 +532,16 @@ pub(super) fn selectable(
             rules.push(rule);
         }
     }
+    rules.push(json!({"inbound":["tun-in"],"ip_version":6,"port":53,"action":"hijack-dns"}));
+    if yes(settings, "lan") {
+        rules.push(
+            json!({"ip_version":6,"ip_is_private":true,"action":"route","outbound":"direct"}),
+        );
+    }
+    // Reject unsupported IPv6 before sniffing accepts the TCP connection.
+    // A reset during TLS is too late for browsers to fall back to IPv4.
+    rules.push(json!({"ip_cidr":["::/0"],"action":"reject","method":"default","no_drop":true}));
+    rules.push(json!({"inbound":["tun-in"],"action":"sniff","timeout":"300ms"}));
     rules.push(json!({"protocol":"dns","action":"hijack-dns"}));
     let mut google = reject.clone();
     google["domain"] = flow.clone();
@@ -586,7 +595,6 @@ pub(super) fn selectable(
             }
         }
     }
-    rules.push(json!({"ip_cidr":["::/0"],"action":"reject"}));
     let tags: Vec<_> = (1..=profiles.len())
         .map(|i| format!("profile-{i}"))
         .collect();
@@ -973,6 +981,60 @@ pub(super) fn share_link(p: &Value) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ipv6_endpoint_bypasses_the_tun_while_other_ipv6_is_captured_and_rejected() {
+        let profile = parse_link(
+            "vless://00000000-0000-4000-8000-000000000000@[2001:db8::10]:8443?security=reality&sni=www.example.com&pbk=public-key&sid=0123abcd&type=tcp",
+        ).unwrap();
+        let config = runtime(&[profile], 0, &json!({"lan":true}), false)
+            .unwrap()
+            .0;
+        let tun = &config["inbounds"][0];
+        assert!(tun["address"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|address| { address.as_str().unwrap().contains(':') }));
+        assert!(tun["route_exclude_address"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("2001:db8::10/128")));
+        let rules = config["route"]["rules"].as_array().unwrap();
+        let endpoint = rules
+            .iter()
+            .position(|rule| {
+                rule["outbound"] == "direct"
+                    && rule["ip_cidr"]
+                        .as_array()
+                        .is_some_and(|values| values.contains(&json!("2001:db8::10")))
+            })
+            .unwrap();
+        let reject = rules
+            .iter()
+            .position(|rule| {
+                rule["action"] == "reject"
+                    && rule["ip_cidr"]
+                        .as_array()
+                        .is_some_and(|values| values.contains(&json!("::/0")))
+            })
+            .unwrap();
+        assert!(endpoint < reject);
+        let sniff = rules
+            .iter()
+            .position(|rule| rule["action"] == "sniff")
+            .unwrap();
+        let dns = rules
+            .iter()
+            .position(|rule| rule["action"] == "hijack-dns" && rule["ip_version"] == 6)
+            .unwrap();
+        let lan = rules
+            .iter()
+            .position(|rule| rule["outbound"] == "direct" && rule["ip_version"] == 6)
+            .unwrap();
+        assert!(dns < lan && lan < reject && reject < sniff);
+        assert_eq!(rules[reject]["no_drop"], true);
+    }
+
     #[test]
     fn rust_config_preserves_legacy_regression_cases() {
         let cases: Vec<Value> =

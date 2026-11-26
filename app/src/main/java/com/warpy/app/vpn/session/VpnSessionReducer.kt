@@ -197,7 +197,7 @@ internal class VpnSessionReducer(
                 return@current VpnSessionReduction(snapshot)
             }
             VpnSessionReduction(
-                snapshot.copy(state = VpnState.Recovering, lastError = null),
+                snapshot.copy(state = VpnState.Recovering, connectedAtElapsedMillis = 0L, lastError = null),
                 listOf(
                     VpnSessionEffect.RecoverConnection(
                         generation = event.generation,
@@ -216,7 +216,7 @@ internal class VpnSessionReducer(
         is VpnSessionEvent.RecoveryDeferred -> current(snapshot, event.generation) {
             if (!snapshot.shouldRun) return@current VpnSessionReduction(snapshot)
             VpnSessionReduction(
-                snapshot.copy(state = VpnState.Recovering, lastError = event.message),
+                snapshot.copy(state = VpnState.Recovering, connectedAtElapsedMillis = 0L, lastError = event.message),
                 listOf(VpnSessionEffect.WaitForUpstream(event.generation)),
             )
         }
@@ -429,7 +429,7 @@ internal class VpnSessionReducer(
     ): VpnSessionReduction = current(snapshot, event.generation) {
         if (event.recoverable && snapshot.shouldRun) {
             VpnSessionReduction(
-                snapshot.copy(state = VpnState.Recovering, lastError = event.message),
+                snapshot.copy(state = VpnState.Recovering, connectedAtElapsedMillis = 0L, lastError = event.message),
                 listOf(
                     VpnSessionEffect.RecoverConnection(
                         generation = event.generation,
@@ -480,46 +480,29 @@ internal class VpnSessionReducer(
         available: Boolean,
     ): VpnSessionReduction {
         if (!snapshot.shouldRun) return VpnSessionReduction(snapshot)
-        // A network event cancels the resource transaction as well as validation.
-        // If startup has not completed, rebuild the core instead of probing a
-        // tunnel that the cancelled transaction may already have closed.
-        if (available && snapshot.runtimeProfileTag == null) {
+        // The proxy probe cannot detect a stale Android TUN. Rebuild both the core
+        // and TUN on handoff so apps also see the replacement VPN network.
+        if (available) {
             val profileTag = snapshot.preferredProfileTag
                 ?: return VpnSessionReduction(snapshot)
             return start(snapshot, profileTag, recovering = true)
         }
         val previousGeneration = snapshot.generation
         val generation = previousGeneration + 1L
-        return if (available) {
-            VpnSessionReduction(
-                snapshot.copy(generation = generation, state = VpnState.Validating),
-                buildList {
-                    if (previousGeneration > 0L) {
-                        add(VpnSessionEffect.CancelOperations(previousGeneration))
-                    }
-                    add(
-                        VpnSessionEffect.ValidateTunnel(
-                            generation,
-                            ValidationReason.Recovery,
-                        ),
-                    )
-                },
-            )
-        } else {
-            VpnSessionReduction(
-                snapshot.copy(
-                    generation = generation,
-                    state = VpnState.Recovering,
-                    lastError = "Waiting for network",
-                ),
-                buildList {
-                    if (previousGeneration > 0L) {
-                        add(VpnSessionEffect.CancelOperations(previousGeneration))
-                    }
-                    add(VpnSessionEffect.WaitForUpstream(generation))
-                },
-            )
-        }
+        return VpnSessionReduction(
+            snapshot.copy(
+                generation = generation,
+                state = VpnState.Recovering,
+                connectedAtElapsedMillis = 0L,
+                lastError = "Ожидание сети",
+            ),
+            buildList {
+                if (previousGeneration > 0L) {
+                    add(VpnSessionEffect.CancelOperations(previousGeneration))
+                }
+                add(VpnSessionEffect.WaitForUpstream(generation))
+            },
+        )
     }
 
     private fun connected(

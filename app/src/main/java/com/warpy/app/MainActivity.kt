@@ -588,7 +588,7 @@ private fun WarpyApp(viewModel: MainViewModel = viewModel()) {
                         pingText = state.diagnostics.pingText,
                         speedText = state.diagnostics.speedText,
                         uptimeText = state.diagnostics.uptimeText,
-                        message = state.diagnostics.message,
+                        message = if (state.vpnStartPending) "" else state.diagnostics.message,
                         commandError = state.commandError,
                         connectionAttemptId = connectionAttemptId,
                         onToggle = {
@@ -866,7 +866,7 @@ private fun applyServiceStatus(
     includeError: Boolean,
 ) {
     when (status) {
-        WarpyService.STATUS_CONNECTING -> viewModel.applyServiceConnecting()
+        WarpyService.STATUS_CONNECTING -> viewModel.applyServiceConnecting(message ?: "Подключение...")
         WarpyService.STATUS_CONNECTED -> viewModel.applyServiceConnected(
             message = "VPN работает",
             connectedAtElapsedMillis = connectedAtElapsedMillis,
@@ -1418,7 +1418,7 @@ private fun ConnectButton(
                 Text(
                     text = when {
                         connected -> profile?.displayName().orEmpty()
-                        connecting -> "Устанавливаем туннель"
+                        connecting -> localizedText(message.ifBlank { "Устанавливаем туннель" })
                         profile == null -> "Добавьте профиль кнопкой +"
                         else -> profile.displayName()
                     },

@@ -2,6 +2,7 @@ package com.warpy.app.data
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.warpy.app.model.AppSettings
@@ -93,9 +94,13 @@ internal fun migrateProfilesForSchema(
 }
 
 @SuppressLint("ApplySharedPref")
-class SettingsStore(context: Context) {
-    private val prefs = context.getSharedPreferences("warpy", Context.MODE_PRIVATE)
-    private val secureStore = EncryptedSharedPreferences.create(
+class SettingsStore internal constructor(
+    private val prefs: SharedPreferences,
+    private val secureStore: SharedPreferences,
+) {
+    constructor(context: Context) : this(
+        context.getSharedPreferences("warpy", Context.MODE_PRIVATE),
+        EncryptedSharedPreferences.create(
             context,
             "warpy_secure",
             MasterKey.Builder(context)
@@ -103,9 +108,10 @@ class SettingsStore(context: Context) {
                 .build(),
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        )
+        ),
+    )
 
-    fun load(): AppSettings {
+    fun load(): AppSettings = synchronized(settingsLock) {
         var primaryJson = secureStore.getString(PROFILES_JSON_KEY, null)
         if (primaryJson == null) {
             val plaintextJson = prefs.getString(PROFILES_JSON_KEY, null)
@@ -184,7 +190,7 @@ class SettingsStore(context: Context) {
         )
     }
 
-    fun save(settings: AppSettings): Boolean {
+    fun save(settings: AppSettings): Boolean = synchronized(settingsLock) {
         if (!writeProfiles(settings.profiles)) return false
 
         return prefs.edit().apply {
@@ -203,6 +209,16 @@ class SettingsStore(context: Context) {
             putString("siteTunnelMode", settings.siteTunnelMode.name)
             putStringSet("tunneledSites", settings.tunneledSites)
         }.commit()
+    }
+
+    internal fun saveSelectedProfile(index: Int, expected: AppSettings): Boolean = synchronized(settingsLock) {
+        val current = load()
+        if (current.profiles != expected.profiles ||
+            current.activeProfileIndex != expected.activeProfileIndex ||
+            index !in current.profiles.indices
+        ) return false
+
+        prefs.edit().putInt("activeProfileIndex", index).commit()
     }
 
     private fun loadLanguage(): AppLanguage {
@@ -297,6 +313,10 @@ class SettingsStore(context: Context) {
             remove("hysteria2UpMbps")
             remove("hysteria2DownMbps")
         }.commit()
+    }
+
+    private companion object {
+        val settingsLock = Any()
     }
 }
 

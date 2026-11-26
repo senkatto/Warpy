@@ -20,6 +20,23 @@ import okhttp3.mockwebserver.SocketPolicy
 
 class TunnelValidatorTest {
     @Test
+    fun `login page or redirect is not confirmation of tunnel health`() = runBlocking {
+        MockWebServer().use { proxy ->
+            proxy.enqueue(MockResponse().setResponseCode(302).addHeader("Location", "http://portal.test/"))
+            proxy.enqueue(MockResponse().setResponseCode(200).setBody("Sign in to Wi-Fi"))
+            proxy.start()
+            val result = HttpTunnelValidator().validate(
+                request(proxy.port).copy(
+                    fallbackUrls = listOf("http://fallback.warpy.test/generate_204"),
+                    retryDelayMillis = 0L,
+                ),
+            )
+            assertFalse(result.isValid)
+            assertEquals(listOf(302, 200), result.attempts.map { it.statusCode })
+        }
+    }
+
+    @Test
     fun `watchdog checks the independent fallback before declaring tunnel failure`() = runBlocking {
         MockWebServer().use { proxy ->
             proxy.enqueue(MockResponse().setResponseCode(503))

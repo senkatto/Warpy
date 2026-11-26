@@ -11,6 +11,7 @@ import com.warpy.app.vpn.session.VpnSessionEvent
 import com.warpy.app.vpn.session.VpnSessionOperations
 import com.warpy.app.vpn.session.VpnSessionReducer
 import com.warpy.app.vpn.session.VpnSessionRuntime
+import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
@@ -155,6 +156,49 @@ class VpnSessionRuntimeTest {
         assertEquals("broken config", runtime.snapshot().lastError)
         assertEquals(1, operations.calls.count { it == "stop:1" })
         runtime.close()
+    }
+
+    @Test
+    fun `network lost during startup waits and reconnects without another callback`() = runBlocking {
+        var starts = 0
+        val operations = FakeOperations(
+            start = {
+                if (++starts == 1) {
+                    throw IllegalStateException("VPN startup failed", IOException("Network is gone"))
+                }
+            },
+        )
+        val runtime = newRuntime(this, operations)
+        try {
+            runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+            awaitState(runtime, VpnState.Recovering)
+            assertEquals(true, runtime.snapshot().shouldRun)
+            operations.networkAvailable = true
+            awaitState(runtime, VpnState.Connected)
+            assertEquals(2, starts)
+            assertEquals("validate:2:Recovery", operations.calls.last())
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun `manual stop cancels retry after network loss during startup`() = runBlocking {
+        val operations = FakeOperations(startFailure = IOException("Network is gone"))
+        val runtime = newRuntime(this, operations)
+        try {
+            runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+            awaitState(runtime, VpnState.Recovering)
+            runtime.dispatch(VpnSessionEvent.StopRequested)
+            awaitState(runtime, VpnState.Stopped)
+            operations.networkAvailable = true
+            delay(50L)
+            assertEquals(VpnState.Stopped, runtime.snapshot().state)
+            assertEquals(false, runtime.snapshot().shouldRun)
+            assertEquals(1, operations.calls.count { it.startsWith("start:") })
+        } finally {
+            runtime.close()
+        }
     }
 
     @Test
@@ -555,7 +599,7 @@ class VpnSessionRuntimeTest {
     }
 
     @Test
-    fun `network return resumes an established tunnel without another callback`() = runBlocking {
+    fun `network return rebuilds an established tunnel without another callback`() = runBlocking {
         val operations = FakeOperations()
         val runtime = newRuntime(this, operations)
         try {
@@ -567,9 +611,57 @@ class VpnSessionRuntimeTest {
 
             operations.networkAvailable = true
             awaitState(runtime, VpnState.Connected)
-            assertEquals(1, operations.calls.count { it.startsWith("start:") })
-            assertEquals(0, operations.calls.count { it.startsWith("stop:") })
+            assertEquals(2, operations.calls.count { it.startsWith("start:") })
+            assertEquals(1, operations.calls.count { it.startsWith("stop:") })
             assertEquals("validate:3:Recovery", operations.calls.last())
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun `handoff replaces a connected core before a successful proxy probe can reuse its TUN`() = runBlocking {
+        val operations = FakeOperations()
+        val runtime = newRuntime(this, operations)
+        try {
+            runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+            awaitState(runtime, VpnState.Connected)
+            operations.calls.clear()
+
+            runtime.dispatch(VpnSessionEvent.UpstreamChanged(true))
+            awaitState(runtime, VpnState.Connected)
+
+            assertEquals(
+                listOf("cancel:1", "stop:1", "start:2:profile_0", "validate:2:Recovery"),
+                operations.calls,
+            )
+        } finally {
+            runtime.close()
+        }
+    }
+
+    @Test
+    fun `manual stop cancels a handoff rebuild without reconnecting`() = runBlocking {
+        var starts = 0
+        val replacementStarted = CompletableDeferred<Unit>()
+        val operations = FakeOperations(start = {
+            if (++starts == 2) {
+                replacementStarted.complete(Unit)
+                CompletableDeferred<Unit>().await()
+            }
+        })
+        val runtime = newRuntime(this, operations)
+        try {
+            runtime.dispatch(VpnSessionEvent.StartRequested("profile_0"))
+            awaitState(runtime, VpnState.Connected)
+            runtime.dispatch(VpnSessionEvent.UpstreamChanged(true))
+            replacementStarted.await()
+            runtime.dispatch(VpnSessionEvent.StopRequested)
+            awaitState(runtime, VpnState.Stopped)
+
+            assertEquals(false, runtime.snapshot().shouldRun)
+            assertEquals(2, starts)
+            assertEquals(listOf("validate:1:Initial"), operations.calls.filter { it.startsWith("validate:") })
         } finally {
             runtime.close()
         }

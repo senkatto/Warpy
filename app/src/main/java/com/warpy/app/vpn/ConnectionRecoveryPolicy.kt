@@ -5,10 +5,14 @@ internal data class UpstreamIdentity(
     val interfaceName: String?,
     val dnsServers: List<String> = emptyList(),
     val isMetered: Boolean? = null,
+    val ipv4Addresses: Set<String> = emptySet(),
+    val defaultRoutes: Set<String> = emptySet(),
+    val isValidated: Boolean = false,
 )
 
 internal fun UpstreamIdentity.hasSameConnection(other: UpstreamIdentity?): Boolean =
-    other != null && networkHandle == other.networkHandle && interfaceName == other.interfaceName
+    other != null && networkHandle == other.networkHandle && interfaceName == other.interfaceName &&
+        ipv4Addresses == other.ipv4Addresses && defaultRoutes == other.defaultRoutes
 
 internal fun isUsablePhysicalNetwork(
     hasInternet: Boolean,
@@ -29,7 +33,9 @@ internal fun isHandoverCandidatePhysicalNetwork(
     isSuspended: Boolean,
     isVpn: Boolean,
     isBlocked: Boolean,
-): Boolean = hasInternet && !isSuspended && !isVpn && !isBlocked
+    hasDefaultRoute: Boolean = true,
+    isCaptivePortal: Boolean = false,
+): Boolean = hasInternet && hasDefaultRoute && !isSuspended && !isVpn && !isBlocked && !isCaptivePortal
 
 internal fun physicalNetworkPriority(
     isValidated: Boolean,
